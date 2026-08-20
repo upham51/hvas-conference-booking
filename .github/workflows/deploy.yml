@@ -1,0 +1,28 @@
+# Publishes the site to Cloudflare whenever main changes.
+#
+# Merging a pull request only updates GitHub — it does not touch the Worker
+# that actually serves hvjaparentteacherconference.upham51.workers.dev. Until
+# this ran, every deploy had to be done by hand with `npx wrangler deploy`,
+# so merged changes could sit invisible on main indefinitely.
+#
+# Requires one repository secret: CLOUDFLARE_API_TOKEN
+#   Cloudflare dashboard -> My Profile -> API Tokens -> Create Token
+#   -> "Edit Cloudflare Workers" template, then add it under
+#   GitHub -> Settings -> Secrets and variables -> Actions.
+# The account is already pinned in wrangler.toml, so no other secret is needed.
+
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
