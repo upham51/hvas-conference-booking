@@ -737,19 +737,13 @@ footer {
 }
 footer p { margin: 0; }
 footer a { color: var(--navy-700); font-weight: 600; text-decoration: underline; }
+/* The mark is the full school lockup, so it carries the name on its own. */
 .footer-mark {
-  height: 36px;
+  height: 40px;
   width: auto;
   display: block;
-  margin: 0 auto 12px;
+  margin: 0 auto 16px;
   opacity: 0.92;
-}
-.footer-name {
-  font-family: 'Averia Serif Libre', serif;
-  font-weight: 600;
-  font-size: 16px;
-  color: var(--navy-900);
-  margin-bottom: 6px;
 }
 
 /* ---------- fade-in ---------- */
