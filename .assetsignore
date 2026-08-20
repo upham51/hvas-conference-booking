@@ -1,7 +1,26 @@
-# Files that live in this repo but must not be served to the public.
-# The Worker publishes the whole repo root ([assets] directory = "." in
-# wrangler.toml), so anything not listed here is reachable over HTTP.
+# Files that must not be served to the public.
+#
+# wrangler.toml sets [assets] directory = ".", so the Worker publishes the
+# whole repo root: anything not listed here becomes a public URL.
+
+# Backend source. Contains the default admin PIN in plain text.
 Code.gs
+
+# Deploy configuration — nothing a visitor needs.
 wrangler.toml
 .assetsignore
 .gitignore
+.git
+.github
+
+# Created inside the workspace by the deploy workflow, which installs
+# wrangler before running it. Without these, `wrangler deploy` tries to
+# upload node_modules/workerd (122 MiB) as a static asset and fails
+# Cloudflare's 25 MiB per-asset limit.
+node_modules
+package.json
+package-lock.json
+
+# Wrangler's own scratch directory. Deploying with it present uploads
+# no-op-worker.js and its source map as if they were site files.
+.wrangler
