@@ -25,6 +25,17 @@
   --shadow-soft: 0 1px 2px rgba(0,20,51,0.04), 0 12px 32px -12px rgba(0,20,51,0.18);
   --shadow-card: 0 1px 3px rgba(0,20,51,0.06), 0 24px 48px -20px rgba(0,20,51,0.22);
   --ease: cubic-bezier(.22,1,.36,1);
+
+  /* Hero-to-card handshake. The code card is pulled up over the bottom of the
+     photo, so these three have to be set together or the card lands on top of
+     the date banner. Override only these variables per breakpoint; the padding
+     that keeps the banner clear is derived from them below.
+       --card-lift : how far the card rises above the band's bottom edge
+       --hero-gap  : guaranteed clear space between date banner and card
+       --ridge-h   : height of the ridge silhouette at the band's bottom */
+  --card-lift: 96px;
+  --hero-gap: 30px;
+  --ridge-h: 112px;
 }
 
 * { box-sizing: border-box; }
@@ -141,7 +152,12 @@ a { color: inherit; }
      clamp is the floor that keeps the summit framed on short screens. */
   flex: 1 1 auto;
   min-height: clamp(420px, 40vw, 720px);
-  padding-bottom: 124px;
+  /* Always leaves --hero-gap of daylight under the date banner, and never lets
+     the copy sit on the ridge. */
+  padding-bottom: max(
+    calc(var(--card-lift) + var(--hero-gap)),
+    calc(var(--ridge-h) + 8px)
+  );
 }
 
 /* ---------- one-page desktop: the whole home screen inside one viewport ----------
@@ -150,7 +166,7 @@ a { color: inherit; }
    normally when the window is too short for it. */
 /* Note: media-query lengths resolve against the real viewport while vh units
    resolve against the zoomed one, so this 760 is real pixels. */
-@media (min-width: 900px) and (min-height: 760px) {
+@media (min-width: 900px) and (min-height: 790px) {
   body[data-screen="screen-code"] {
     /* html carries zoom: 0.9, so 100vh renders at 90% of the real viewport
        and would leave a 10% gap under the fold. Divide it back out. */
@@ -170,8 +186,7 @@ a { color: inherit; }
     background-position: center 47%;
   }
   .hero-band .topbar { padding-top: 22px; }
-  .hero-inner { padding-bottom: 112px; }
-  .hero-ridge { height: 104px; }
+  :root { --card-lift: 96px; --hero-gap: 30px; --ridge-h: 104px; }
 }
 
 /* Shorter laptops (1280x800 and friends): the hero copy is the only block
@@ -183,8 +198,7 @@ a { color: inherit; }
   .date-banner { margin-top: 18px; padding: 12px 20px; }
   .date-banner-main { font-size: 18px; }
   .date-banner-sub { font-size: 13px; }
-  .hero-inner { padding-bottom: 92px; }
-  .hero-ridge { height: 86px; }
+  :root { --card-lift: 74px; --hero-gap: 24px; --ridge-h: 86px; }
 }
 .hero-band .topbar { padding-top: 30px; }
 .hero-band .brand .school-name { color: #fff; text-shadow: 0 1px 12px rgba(0,10,26,0.55); }
@@ -197,7 +211,7 @@ a { color: inherit; }
   right: 0;
   bottom: -1px;
   width: 100%;
-  height: 112px;
+  height: var(--ridge-h);
   z-index: 1;
   display: block;
 }
@@ -211,7 +225,7 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-inner {
   min-height: 0;
   padding-bottom: 74px;
 }
-body[data-screen]:not([data-screen="screen-code"]) .hero-ridge { height: 76px; }
+body[data-screen]:not([data-screen="screen-code"]) { --ridge-h: 76px; }
 body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::before {
   background-size: cover;
   background-position: center 58%;
@@ -224,8 +238,7 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
 }
 
 @media (max-width: 640px) {
-  .hero-inner { min-height: clamp(560px, 76vh, 720px); padding-bottom: 100px; }
-  .hero-ridge { height: 84px; }
+  .hero-inner { min-height: clamp(560px, 76vh, 720px); }
   /* Portrait screens crop the photo sideways, so scale it up and drop the
      framing to keep the peak large and the sky above it tight. */
   .hero-band-photo::before {
@@ -362,7 +375,7 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-soft);
-  margin: 22px 0 11px;
+  margin: 18px 0 10px;
 }
 .steps-strip {
   display: grid;
@@ -461,17 +474,12 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
    whichever lands last wins the margin-top. */
 .center-col.hero-overlap,
 .hero-overlap {
-  margin-top: -96px;
+  margin-top: calc(-1 * var(--card-lift));
   position: relative;
   z-index: 3;
 }
 @media (max-width: 640px) {
-  .center-col.hero-overlap,
-  .hero-overlap { margin-top: -58px; }
-}
-@media (min-width: 900px) {
-  .center-col.hero-overlap,
-  .hero-overlap { margin-top: -112px; }
+  :root { --card-lift: 58px; --hero-gap: 26px; --ridge-h: 84px; }
 }
 
 /* ---------- code entry ---------- */
@@ -771,8 +779,8 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
 footer {
   text-align: center;
   max-width: 860px;
-  margin: 28px auto 0;
-  padding: 22px 0 26px;
+  margin: 22px auto 0;
+  padding: 18px 0 22px;
   border-top: 1px solid var(--line);
   color: var(--ink-soft);
   font-size: 14px;
@@ -782,10 +790,10 @@ footer p { margin: 0; }
 footer a { color: var(--navy-700); font-weight: 600; text-decoration: underline; }
 /* The mark is the full school lockup, so it carries the name on its own. */
 .footer-mark {
-  height: 32px;
+  height: 30px;
   width: auto;
   display: block;
-  margin: 0 auto 10px;
+  margin: 0 auto 8px;
   opacity: 0.92;
 }
 
