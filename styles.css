@@ -91,6 +91,8 @@ a { color: inherit; }
   position: relative;
   z-index: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   background:
     radial-gradient(900px 500px at 18% 0%, rgba(220,191,138,0.16), transparent 60%),
     linear-gradient(175deg, var(--navy-900) 0%, var(--navy-800) 60%, var(--navy-700) 100%);
@@ -135,8 +137,54 @@ a { color: inherit; }
   z-index: 2;
   display: flex;
   flex-direction: column;
-  min-height: clamp(600px, 48vw, 800px);
-  padding-bottom: 148px;
+  /* Grows into whatever height the one-page desktop layout leaves over; the
+     clamp is the floor that keeps the summit framed on short screens. */
+  flex: 1 1 auto;
+  min-height: clamp(420px, 40vw, 720px);
+  padding-bottom: 124px;
+}
+
+/* ---------- one-page desktop: the whole home screen inside one viewport ----------
+   The fixed blocks (card, steps, footer) take what they need and the photo
+   takes the rest, so the page is exactly 100vh when it fits and scrolls
+   normally when the window is too short for it. */
+/* Note: media-query lengths resolve against the real viewport while vh units
+   resolve against the zoomed one, so this 760 is real pixels. */
+@media (min-width: 900px) and (min-height: 760px) {
+  body[data-screen="screen-code"] {
+    /* html carries zoom: 0.9, so 100vh renders at 90% of the real viewport
+       and would leave a 10% gap under the fold. Divide it back out. */
+    min-height: calc(100vh / 0.9);
+    display: flex;
+    flex-direction: column;
+  }
+  body[data-screen="screen-code"] > .hero-band { flex: 1 1 auto; }
+  body[data-screen="screen-code"] > .wrap { flex: 0 0 auto; }
+  /* Drop the floor right down: the flex line above hands the photo every
+     pixel the fixed blocks do not use, so the floor only matters as a
+     backstop on the shortest windows this rule still applies to. */
+  body[data-screen="screen-code"] .hero-inner { min-height: 340px; }
+  /* Shorter band means a tighter slice of the photo, so ride the crop higher
+     to keep clear sky between the brand bar and the summit. */
+  body[data-screen="screen-code"] .hero-band-photo::before {
+    background-position: center 47%;
+  }
+  .hero-band .topbar { padding-top: 22px; }
+  .hero-inner { padding-bottom: 112px; }
+  .hero-ridge { height: 104px; }
+}
+
+/* Shorter laptops (1280x800 and friends): the hero copy is the only block
+   left that can give up height without losing anything. */
+@media (min-width: 900px) and (max-height: 830px) {
+  .hero-band .hero { padding-top: 22px; }
+  .hero-band .hero h1 { font-size: 38px; }
+  .hero-band .hero p.lead { font-size: 15.5px; margin-top: 12px; }
+  .date-banner { margin-top: 18px; padding: 12px 20px; }
+  .date-banner-main { font-size: 18px; }
+  .date-banner-sub { font-size: 13px; }
+  .hero-inner { padding-bottom: 92px; }
+  .hero-ridge { height: 86px; }
 }
 .hero-band .topbar { padding-top: 30px; }
 .hero-band .brand .school-name { color: #fff; text-shadow: 0 1px 12px rgba(0,10,26,0.55); }
@@ -149,7 +197,7 @@ a { color: inherit; }
   right: 0;
   bottom: -1px;
   width: 100%;
-  height: 132px;
+  height: 112px;
   z-index: 1;
   display: block;
 }
@@ -218,7 +266,7 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
 /* Only the photo hero on index.html puts this copy on top of an image. */
 .hero-band .hero {
   margin-top: auto;
-  padding: 40px 0 0;
+  padding: 32px 0 0;
 }
 .hero-band .hero h1 {
   color: #fff;
@@ -260,8 +308,8 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
   display: inline-flex;
   align-items: center;
   gap: 16px;
-  margin: 30px 0 0;
-  padding: 15px 26px;
+  margin: 24px 0 0;
+  padding: 14px 24px;
   background: linear-gradient(180deg, rgba(220,191,138,0.26), rgba(220,191,138,0.12));
   border: 1.5px solid rgba(220,191,138,0.55);
   backdrop-filter: blur(12px) saturate(140%);
@@ -314,7 +362,7 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-soft);
-  margin: 44px 0 16px;
+  margin: 22px 0 11px;
 }
 .steps-strip {
   display: grid;
@@ -324,60 +372,51 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
   margin: 0 auto;
 }
 .step {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "num title" "num sub";
   align-items: center;
-  text-align: center;
-  gap: 4px;
-  padding: 24px 20px 22px;
+  column-gap: 13px;
+  row-gap: 1px;
+  padding: 14px 16px;
   border-radius: var(--radius-md);
   background: var(--white);
   border: 1px solid var(--line);
   box-shadow: var(--shadow-soft);
 }
 .step-num {
-  width: 32px;
-  height: 32px;
+  grid-area: num;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: linear-gradient(180deg, var(--navy-700), var(--navy-900));
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 800;
   flex-shrink: 0;
-  margin-bottom: 8px;
   box-shadow: 0 8px 16px -8px rgba(0,32,74,0.6);
 }
 .step-title {
-  font-size: 15px;
+  grid-area: title;
+  font-size: 14.5px;
   font-weight: 700;
   color: var(--navy-900);
   letter-spacing: -0.005em;
 }
 .step-sub {
-  font-size: 13px;
+  grid-area: sub;
+  font-size: 12.5px;
   font-weight: 500;
   line-height: 1.45;
   color: var(--ink-soft);
 }
 @media (max-width: 700px) {
-  .steps-head { margin: 34px 0 12px; }
+  .steps-head { margin: 30px 0 12px; }
   .steps-strip { grid-template-columns: 1fr; gap: 10px; }
-  .step {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    grid-template-areas: "num title" "num sub";
-    column-gap: 14px;
-    row-gap: 2px;
-    text-align: left;
-    align-items: center;
-    padding: 15px 18px;
-  }
-  .step-num { grid-area: num; margin-bottom: 0; }
-  .step-title { grid-area: title; }
-  .step-sub { grid-area: sub; }
+  .step { padding: 15px 18px; }
 }
 
 /* ---------- banner restating the exact date being viewed on the slot picker ---------- */
@@ -407,7 +446,7 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
   box-shadow: var(--shadow-card);
   border: 1px solid rgba(255,255,255,0.6);
 }
-.card-pad { padding: 40px; }
+.card-pad { padding: 32px 36px; }
 @media (max-width: 640px) {
   .card-pad { padding: 26px 22px; }
 }
@@ -429,6 +468,10 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
 @media (max-width: 640px) {
   .center-col.hero-overlap,
   .hero-overlap { margin-top: -58px; }
+}
+@media (min-width: 900px) {
+  .center-col.hero-overlap,
+  .hero-overlap { margin-top: -112px; }
 }
 
 /* ---------- code entry ---------- */
@@ -464,8 +507,8 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
   box-shadow: 0 0 0 4px rgba(0,32,74,0.08);
 }
 .hint {
-  margin-top: 14px;
-  max-width: 40ch;
+  margin-top: 12px;
+  max-width: 46ch;
   margin-left: auto;
   margin-right: auto;
   font-size: 14.5px;
@@ -728,8 +771,8 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
 footer {
   text-align: center;
   max-width: 860px;
-  margin: 64px auto 0;
-  padding: 44px 0 48px;
+  margin: 28px auto 0;
+  padding: 22px 0 26px;
   border-top: 1px solid var(--line);
   color: var(--ink-soft);
   font-size: 14px;
@@ -739,10 +782,10 @@ footer p { margin: 0; }
 footer a { color: var(--navy-700); font-weight: 600; text-decoration: underline; }
 /* The mark is the full school lockup, so it carries the name on its own. */
 .footer-mark {
-  height: 40px;
+  height: 32px;
   width: auto;
   display: block;
-  margin: 0 auto 16px;
+  margin: 0 auto 10px;
   opacity: 0.92;
 }
 
