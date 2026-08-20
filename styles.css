@@ -86,18 +86,14 @@ a { color: inherit; }
   font-weight: 600;
 }
 
-/* ---------- dark hero band (index.html) ---------- */
+/* ---------- photo hero band (index.html) ---------- */
 .hero-band {
   position: relative;
+  z-index: 0;
   overflow: hidden;
   background:
     radial-gradient(900px 500px at 18% 0%, rgba(220,191,138,0.16), transparent 60%),
     linear-gradient(175deg, var(--navy-900) 0%, var(--navy-800) 60%, var(--navy-700) 100%);
-  padding-bottom: 96px;
-}
-.hero-band-photo {
-  position: relative;
-  z-index: 0;
 }
 .hero-band-photo::before {
   content: '';
@@ -105,50 +101,89 @@ a { color: inherit; }
   inset: 0;
   background-image: url('assets/hero-mountain.jpg');
   background-size: cover;
-  background-position: center 55%;
-  filter: saturate(1.35) brightness(1.05) contrast(1.04);
+  background-repeat: no-repeat;
+  /* The summit sits about 28% of the way down the source photo. Anchoring the
+     crop high keeps the whole peak (plus a little sky above it) inside the
+     band instead of slicing it off at the top of the screen. */
+  background-position: center 36%;
+  filter: saturate(1.22) contrast(1.03);
   z-index: -2;
 }
 .hero-band-photo::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(0,20,51,0.58) 0%, rgba(0,32,74,0.28) 42%, rgba(0,32,74,0.32) 66%, rgba(0,20,51,0.64) 100%);
+  /* Dark at the very top (so the logo reads), deliberately light across the
+     middle (so the peak stays bright), then deep at the bottom where the
+     headline and date banner sit. */
+  background:
+    linear-gradient(180deg,
+      rgba(0,20,51,0.52) 0%,
+      rgba(0,26,64,0.18) 14%,
+      rgba(0,26,64,0.07) 27%,
+      rgba(0,20,51,0.38) 47%,
+      rgba(0,20,51,0.70) 72%,
+      rgba(0,17,43,0.88) 100%),
+    radial-gradient(118% 62% at 50% 108%, rgba(0,12,30,0.76) 0%, rgba(0,12,30,0) 72%);
   z-index: -1;
 }
-.hero-fade {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  width: 100%;
-  height: 140px;
-  z-index: 1;
-  display: block;
+
+/* Header stack: brand pinned to the top, hero copy pushed to the bottom so the
+   mountain has the whole upper half of the band to itself. */
+.hero-inner {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-height: clamp(600px, 48vw, 800px);
+  padding-bottom: 148px;
 }
 .hero-band .topbar { padding-top: 30px; }
 .hero-band .brand .school-name { color: #fff; text-shadow: 0 1px 12px rgba(0,10,26,0.55); }
-.hero-band .brand .school-sub { color: rgba(255,255,255,0.65); text-shadow: 0 1px 10px rgba(0,10,26,0.5); }
-.hero-band .hero { position: relative; z-index: 2; }
-.hero-band .hero h1 { color: #fff; text-shadow: 0 2px 20px rgba(0,10,26,0.5), 0 1px 3px rgba(0,10,26,0.4); }
-.hero-band .hero p.lead { color: rgba(255,255,255,0.85); text-shadow: 0 1px 12px rgba(0,10,26,0.45); }
-.hero-band .hero .eyebrow {
-  color: var(--gold-400);
-  background: rgba(220,191,138,0.14);
-  border-color: rgba(220,191,138,0.4);
-}
-.hero-mountains {
+.hero-band .brand .school-sub { color: rgba(255,255,255,0.72); text-shadow: 0 1px 10px rgba(0,10,26,0.5); }
+
+/* Layered ridge line that hands the photo off to the page background. */
+.hero-ridge {
   position: absolute;
   left: 0;
-  bottom: 0;
+  right: 0;
+  bottom: -1px;
   width: 100%;
-  height: 220px;
+  height: 132px;
   z-index: 1;
   display: block;
 }
-.hero-overlap {
-  margin-top: -78px;
-  position: relative;
-  z-index: 3;
+.hero-ridge .ridge-far { fill: rgba(244,247,252,0.42); }
+.hero-ridge .ridge-near { fill: var(--navy-50); }
+
+/* Once someone is past the code screen the tall hero (and its "enter your
+   code" copy) is just in the way, so the band collapses to a photo header. */
+body[data-screen]:not([data-screen="screen-code"]) .hero { display: none; }
+body[data-screen]:not([data-screen="screen-code"]) .hero-inner {
+  min-height: 0;
+  padding-bottom: 74px;
+}
+body[data-screen]:not([data-screen="screen-code"]) .hero-ridge { height: 76px; }
+body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::before {
+  background-size: cover;
+  background-position: center 58%;
+}
+body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
+  background: linear-gradient(180deg,
+    rgba(0,20,51,0.82) 0%,
+    rgba(0,20,51,0.58) 45%,
+    rgba(0,20,51,0.80) 100%);
+}
+
+@media (max-width: 640px) {
+  .hero-inner { min-height: clamp(560px, 76vh, 720px); padding-bottom: 100px; }
+  .hero-ridge { height: 84px; }
+  /* Portrait screens crop the photo sideways, so scale it up and drop the
+     framing to keep the peak large and the sky above it tight. */
+  .hero-band-photo::before {
+    background-size: auto 134%;
+    background-position: center 46%;
+  }
 }
 
 /* ---------- simple dark strip (teacher / admin pages) ---------- */
@@ -159,10 +194,44 @@ a { color: inherit; }
 .topbar-dark .brand .school-name { color: #fff; }
 .topbar-dark .brand .school-sub { color: rgba(255,255,255,0.55); }
 
-/* ---------- hero ---------- */
+/* ---------- hero copy ---------- */
 .hero {
   text-align: center;
-  padding: 64px 0 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px 0 8px;
+}
+.hero h1 {
+  font-size: clamp(34px, 5.4vw, 56px);
+  font-weight: 600;
+  line-height: 1.08;
+  max-width: 760px;
+}
+.hero p.lead {
+  margin: 16px 0 0;
+  max-width: 47ch;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+/* Only the photo hero on index.html puts this copy on top of an image. */
+.hero-band .hero {
+  margin-top: auto;
+  padding: 40px 0 0;
+}
+.hero-band .hero h1 {
+  color: #fff;
+  text-shadow: 0 2px 24px rgba(0,10,26,0.55), 0 1px 3px rgba(0,10,26,0.45);
+}
+.hero-band .hero p.lead {
+  color: rgba(255,255,255,0.9);
+  text-shadow: 0 1px 14px rgba(0,10,26,0.55);
+}
+.hero-band .hero .eyebrow {
+  color: var(--gold-400);
+  background: rgba(220,191,138,0.14);
+  border-color: rgba(220,191,138,0.4);
 }
 .hero .eyebrow {
   display: inline-flex;
@@ -181,20 +250,24 @@ a { color: inherit; }
   font-weight: 700;
   margin-bottom: 22px;
 }
+@media (max-width: 640px) {
+  .hero { padding-top: 28px; }
+  .hero p.lead { font-size: 16px; max-width: 34ch; }
+}
 
-/* ---------- BIG date banner (main screen, always shown, unmissable) ---------- */
+/* ---------- date banner (main screen, always shown, unmissable) ---------- */
 .date-banner {
   display: inline-flex;
   align-items: center;
   gap: 16px;
-  background: linear-gradient(180deg, rgba(220,191,138,0.24), rgba(220,191,138,0.12));
-  border: 1.5px solid rgba(220,191,138,0.5);
+  margin: 30px 0 0;
+  padding: 15px 26px;
+  background: linear-gradient(180deg, rgba(220,191,138,0.26), rgba(220,191,138,0.12));
+  border: 1.5px solid rgba(220,191,138,0.55);
   backdrop-filter: blur(12px) saturate(140%);
   -webkit-backdrop-filter: blur(12px) saturate(140%);
   border-radius: 18px;
-  padding: 16px 28px;
-  margin-bottom: 26px;
-  box-shadow: 0 8px 30px -12px rgba(0,10,26,0.35);
+  box-shadow: 0 18px 40px -22px rgba(0,10,26,0.8);
 }
 .date-banner-icon {
   width: 42px;
@@ -203,10 +276,11 @@ a { color: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(220,191,138,0.16);
-  border-radius: 11px;
+  color: var(--gold-400);
+  background: rgba(220,191,138,0.18);
+  border-radius: 12px;
 }
-.date-banner-icon svg { width: 24px; height: 24px; }
+.date-banner-icon svg { width: 23px; height: 23px; display: block; }
 .date-banner-text { text-align: left; }
 .date-banner-main {
   font-family: 'Averia Serif Libre', serif;
@@ -225,43 +299,85 @@ a { color: inherit; }
   text-shadow: 0 1px 8px rgba(0,10,26,0.4);
 }
 @media (max-width: 560px) {
-  .date-banner { flex-direction: column; text-align: center; padding: 18px 22px; }
-  .date-banner-text { text-align: center; }
+  .date-banner { gap: 13px; padding: 14px 20px; margin-top: 24px; }
+  .date-banner-icon { width: 36px; height: 36px; border-radius: 10px; }
+  .date-banner-icon svg { width: 20px; height: 20px; }
+  .date-banner-main { font-size: 17px; }
+  .date-banner-sub { font-size: 13px; }
 }
 
 /* ---------- "how it works" step strip ---------- */
+.steps-head {
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 44px 0 16px;
+}
 .steps-strip {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 30px;
-  flex-wrap: wrap;
-  margin: 30px 0 0;
-  padding: 0 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  max-width: 860px;
+  margin: 0 auto;
 }
 .step {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--ink-soft);
+  text-align: center;
+  gap: 4px;
+  padding: 24px 20px 22px;
+  border-radius: var(--radius-md);
+  background: var(--white);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
 }
 .step-num {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  background: var(--navy-800);
+  background: linear-gradient(180deg, var(--navy-700), var(--navy-900));
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 800;
   flex-shrink: 0;
+  margin-bottom: 8px;
+  box-shadow: 0 8px 16px -8px rgba(0,32,74,0.6);
 }
-@media (max-width: 640px) {
-  .steps-strip { flex-direction: column; align-items: center; gap: 14px; margin-top: 26px; }
+.step-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--navy-900);
+  letter-spacing: -0.005em;
+}
+.step-sub {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+@media (max-width: 700px) {
+  .steps-head { margin: 34px 0 12px; }
+  .steps-strip { grid-template-columns: 1fr; gap: 10px; }
+  .step {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-areas: "num title" "num sub";
+    column-gap: 14px;
+    row-gap: 2px;
+    text-align: left;
+    align-items: center;
+    padding: 15px 18px;
+  }
+  .step-num { grid-area: num; margin-bottom: 0; }
+  .step-title { grid-area: title; }
+  .step-sub { grid-area: sub; }
 }
 
 /* ---------- banner restating the exact date being viewed on the slot picker ---------- */
@@ -284,20 +400,6 @@ a { color: inherit; }
 @media (max-width: 480px) {
   .active-day-banner { font-size: 14px; }
 }
-.hero h1 {
-  font-size: clamp(32px, 5vw, 52px);
-  font-weight: 600;
-  max-width: 720px;
-  margin: 0 auto;
-}
-.hero p.lead {
-  margin: 18px auto 0;
-  max-width: 520px;
-  color: var(--ink-soft);
-  font-size: 17px;
-  line-height: 1.6;
-}
-
 /* ---------- cards ---------- */
 .card {
   background: var(--white);
@@ -311,18 +413,34 @@ a { color: inherit; }
 }
 
 .center-col {
-  max-width: 460px;
+  width: 100%;
+  max-width: 492px;
   margin: 40px auto 0;
+}
+/* Lift the code card so it overlaps the ridge instead of floating in a gap.
+   Declared after .center-col on purpose: both are single-class selectors, so
+   whichever lands last wins the margin-top. */
+.center-col.hero-overlap,
+.hero-overlap {
+  margin-top: -96px;
+  position: relative;
+  z-index: 3;
+}
+@media (max-width: 640px) {
+  .center-col.hero-overlap,
+  .hero-overlap { margin-top: -58px; }
 }
 
 /* ---------- code entry ---------- */
+.code-form { text-align: center; }
 .code-form label {
   display: block;
-  font-size: 14.5px;
+  font-size: 12.5px;
   font-weight: 700;
-  color: var(--navy-800);
-  letter-spacing: 0.02em;
-  margin-bottom: 10px;
+  color: var(--navy-700);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 12px;
 }
 .code-input {
   width: 100%;
@@ -346,7 +464,10 @@ a { color: inherit; }
   box-shadow: 0 0 0 4px rgba(0,32,74,0.08);
 }
 .hint {
-  margin-top: 12px;
+  margin-top: 14px;
+  max-width: 40ch;
+  margin-left: auto;
+  margin-right: auto;
   font-size: 14.5px;
   line-height: 1.5;
   color: var(--ink-soft);
@@ -606,12 +727,30 @@ a { color: inherit; }
 /* ---------- footer ---------- */
 footer {
   text-align: center;
-  padding: 60px 0 40px;
+  max-width: 860px;
+  margin: 64px auto 0;
+  padding: 44px 0 48px;
+  border-top: 1px solid var(--line);
   color: var(--ink-soft);
   font-size: 14px;
   line-height: 1.7;
 }
+footer p { margin: 0; }
 footer a { color: var(--navy-700); font-weight: 600; text-decoration: underline; }
+.footer-mark {
+  height: 36px;
+  width: auto;
+  display: block;
+  margin: 0 auto 12px;
+  opacity: 0.92;
+}
+.footer-name {
+  font-family: 'Averia Serif Libre', serif;
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--navy-900);
+  margin-bottom: 6px;
+}
 
 /* ---------- fade-in ---------- */
 .fade-in { animation: fadeIn .5s var(--ease); }

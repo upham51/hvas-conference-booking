@@ -9,12 +9,8 @@
 </head>
 <body>
 
-<div class="hero-band hero-band-photo">
-  <svg class="hero-fade" viewBox="0 0 1440 140" preserveAspectRatio="none" aria-hidden="true">
-    <polygon points="0,140 0,110 120,95 240,115 360,80 480,105 600,70 720,100 840,75 960,110 1080,85 1200,115 1320,90 1440,105 1440,140" fill="#f4f7fc"/>
-  </svg>
-
-  <div class="wrap">
+<header class="hero-band hero-band-photo">
+  <div class="wrap hero-inner">
     <div class="topbar">
       <div class="brand">
         <img src="assets/logo-full.png" alt="Hood View Adventist School" />
@@ -26,27 +22,33 @@
     </div>
 
     <div class="hero">
+      <h1>Parent&#8211;Teacher Conferences</h1>
+      <p class="lead">Enter your child&#39;s classroom code to see open times and reserve a 15-minute conference.</p>
+
       <div class="date-banner" id="dateBanner">
         <div class="date-banner-icon">
-          <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="16" rx="2.5" stroke="#dcbf8a" stroke-width="2"/><path d="M3 10h18" stroke="#dcbf8a" stroke-width="2"/><path d="M8 3v4M16 3v4" stroke="#dcbf8a" stroke-width="2" stroke-linecap="round"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="2"/><path d="M3 10h18" stroke="currentColor" stroke-width="2"/><path d="M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </div>
         <div class="date-banner-text">
           <div class="date-banner-main" id="dateBannerMain">Wed, Nov 4 &amp; Thu, Nov 5, 2026</div>
-          <div class="date-banner-sub" id="dateBannerSub">2:00 PM – 7:00 PM each day</div>
+          <div class="date-banner-sub" id="dateBannerSub">2:00 PM &#8211; 7:00 PM each day</div>
         </div>
       </div>
-      <h1>Parent–Teacher Conferences</h1>
-      <p class="lead">Enter your child's classroom code below to see open times and reserve a 15-minute conference.</p>
     </div>
   </div>
-</div>
+
+  <svg class="hero-ridge" viewBox="0 0 1440 132" preserveAspectRatio="none" aria-hidden="true">
+    <path class="ridge-far" d="M0,132 L0,78 L110,60 L250,74 L390,42 L530,68 L680,26 L830,60 L980,38 L1120,70 L1250,48 L1360,68 L1440,54 L1440,132 Z"/>
+    <path class="ridge-near" d="M0,132 L0,104 L150,90 L300,104 L450,80 L600,100 L760,74 L900,98 L1040,82 L1190,102 L1320,88 L1440,100 L1440,132 Z"/>
+  </svg>
+</header>
 
 <div class="wrap">
   <!-- ===== SCREEN 1: CODE ENTRY ===== -->
   <section id="screen-code">
     <div class="center-col card fade-in hero-overlap">
       <div class="card-pad code-form">
-        <label for="codeInput">Classroom Code</label>
+        <label for="codeInput">Classroom code</label>
         <input id="codeInput" class="code-input" maxlength="12" placeholder="e.g. WHITE" autocomplete="off" autocapitalize="characters" />
         <div class="hint">This code comes from your child's teacher, usually their name or a color, like <strong>WHITE</strong>. Don't have it? Contact the school office.</div>
         <div class="alert alert-error" id="codeError"></div>
@@ -56,10 +58,23 @@
       </div>
     </div>
 
+    <div class="steps-head fade-in">How it works</div>
     <div class="steps-strip fade-in">
-      <div class="step"><span class="step-num">1</span> Type your class code</div>
-      <div class="step"><span class="step-num">2</span> Pick an open time</div>
-      <div class="step"><span class="step-num">3</span> Enter your info, you're done!</div>
+      <div class="step">
+        <span class="step-num">1</span>
+        <span class="step-title">Type your class code</span>
+        <span class="step-sub">Your teacher shares it with you</span>
+      </div>
+      <div class="step">
+        <span class="step-num">2</span>
+        <span class="step-title">Pick an open time</span>
+        <span class="step-sub">Both days, all at a glance</span>
+      </div>
+      <div class="step">
+        <span class="step-num">3</span>
+        <span class="step-title">Enter your info</span>
+        <span class="step-sub">You&#39;re done &#8212; we&#39;ll email you</span>
+      </div>
     </div>
   </section>
 
@@ -149,8 +164,12 @@
   </section>
 
   <footer>
-    Hood View Adventist School · Questions about a conference time? Contact the school office.<br />
-    Trouble with this website? Email <a href="mailto:principal@hvja.org">principal@hvja.org</a>.
+    <img class="footer-mark" src="assets/logo-mark.png" alt="" />
+    <div class="footer-name">Hood View Adventist School</div>
+    <p>
+      Questions about a conference time? Contact the school office.<br />
+      Trouble with this website? Email <a href="mailto:principal@hvja.org">principal@hvja.org</a>.
+    </p>
   </footer>
 </div>
 
@@ -248,7 +267,12 @@
     ['screen-code', 'screen-book', 'screen-confirm', 'screen-manage'].forEach((id) => {
       el(id).style.display = id === name ? '' : 'none';
     });
+    // Lets the stylesheet collapse the tall photo hero on every screen after
+    // the code entry, where its headline no longer applies.
+    document.body.dataset.screen = name;
+    window.scrollTo({ top: 0, behavior: 'auto' });
   }
+  showScreen('screen-code');
 
   function setBtnLoading(btn, textEl, loading, label) {
     btn.disabled = loading;
