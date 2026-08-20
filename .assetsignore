@@ -1,0 +1,7 @@
+# Files that live in this repo but must not be served to the public.
+# The Worker publishes the whole repo root ([assets] directory = "." in
+# wrangler.toml), so anything not listed here is reachable over HTTP.
+Code.gs
+wrangler.toml
+.assetsignore
+.gitignore
