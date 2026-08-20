@@ -24,3 +24,6 @@ package-lock.json
 # Wrangler's own scratch directory. Deploying with it present uploads
 # no-op-worker.js and its source map as if they were site files.
 .wrangler
+
+# Layout regression check — build tooling, not part of the site.
+tests

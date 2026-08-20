@@ -1,0 +1,11 @@
+{
+  "name": "hvas-conference-booking",
+  "private": true,
+  "description": "Parent-teacher conference booking site for Hood View Adventist School",
+  "scripts": {
+    "test": "node tests/layout-check.js"
+  },
+  "devDependencies": {
+    "playwright": "1.55.0"
+  }
+}
