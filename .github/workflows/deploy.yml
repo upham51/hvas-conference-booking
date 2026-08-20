@@ -26,3 +26,6 @@ jobs:
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # The action defaults to wrangler 3.90.0, which warns it is too old
+          # to be safe. Match what a local `npx wrangler deploy` would use.
+          wranglerVersion: "4"
