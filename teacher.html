@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>My Conference Schedule · Hood View Adventist School</title>
+<link rel="icon" href="assets/logo-full.png" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="topbar-dark">
+  <div class="wrap">
+    <div class="topbar" style="padding-top:0;">
+      <div class="brand">
+        <img src="assets/logo-full.png" alt="Hood View Adventist School" />
+        <div>
+          <div class="school-name">Hood View Adventist School</div>
+          <div class="school-sub">Teacher Schedule</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div id="loadingState" class="hero">
+    <p class="lead">Loading your schedule…</p>
+  </div>
+
+  <div id="errorState" style="display:none;" class="center-col card">
+    <div class="card-pad" style="text-align:center;">
+      <h2 style="font-size:20px;">Link not recognized</h2>
+      <p class="lead" style="margin-top:8px;">Please use the private link the school office sent you. If it's not working, contact the office.</p>
+    </div>
+  </div>
+
+  <div id="mainState" style="display:none;">
+    <div class="teacher-head fade-in">
+      <div class="grade-pill" id="tGrade">—</div>
+      <h1 id="tTeacher">—</h1>
+      <p class="lead" style="margin-top:10px;">This is your own conference schedule. Changes here update automatically, nothing else to send in.</p>
+    </div>
+
+    <div class="center-col card fade-in" style="max-width:640px;">
+      <div class="card-pad">
+        <h2 style="font-size:19px; margin-bottom:4px;">Your Hours: Nov 4 &amp; 5</h2>
+        <p class="lead" style="margin:6px 0 22px; text-align:left; font-size:14.5px;">Pick when your conferences start, end, and how long each one is. This applies to both days.</p>
+
+        <div class="settings-row">
+          <div class="field">
+            <label for="startTime">Start Time</label>
+            <select id="startTime"></select>
+          </div>
+          <div class="field">
+            <label for="endTime">End Time</label>
+            <select id="endTime"></select>
+          </div>
+          <div class="field">
+            <label for="incrementMin">Length of Each Conference</label>
+            <select id="incrementMin">
+              <option value="10">10 minutes</option>
+              <option value="15">15 minutes</option>
+              <option value="20">20 minutes</option>
+              <option value="30">30 minutes</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="alert alert-error" id="saveError"></div>
+        <div class="alert alert-success" id="saveSuccess">Saved! Your new schedule is live for parents right now.</div>
+        <button class="btn btn-primary" id="saveBtn">
+          <span id="saveBtnText">Save My Schedule</span>
+        </button>
+
+        <p class="hint" style="margin-top:14px;">Your classroom code for parents is <strong id="tCode" style="color:var(--navy-800);"></strong>. Already-booked times are always kept. Changing your hours only affects open slots.</p>
+      </div>
+    </div>
+
+    <div class="center-col card fade-in" style="max-width:640px; margin-top:20px;">
+      <div class="card-pad">
+        <h2 style="font-size:19px;">Who's Signed Up</h2>
+        <div id="bookingList" class="booking-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Hood View Adventist School · This link is private to you, please don't share it with parents.<br />
+    Trouble with this website? Email <a href="mailto:principal@hvja.org">principal@hvja.org</a>.
+  </footer>
+</div>
+
+<script src="config.js"></script>
+<script src="api.js"></script>
+<script>
+  const el = (id) => document.getElementById(id);
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('t');
+
+  function timeOptions(selectEl, selected) {
+    const opts = [];
+    for (let m = 6 * 60; m <= 20 * 60; m += 15) {
+      const h = Math.floor(m / 60), mm = m % 60;
+      const val = `${h.toString().padStart(2,'0')}:${mm.toString().padStart(2,'0')}`;
+      const period = h >= 12 ? 'PM' : 'AM';
+      const h12 = h % 12 === 0 ? 12 : h % 12;
+      const label = `${h12}:${mm.toString().padStart(2,'0')} ${period}`;
+      opts.push(`<option value="${val}" ${val === selected ? 'selected' : ''}>${label}</option>`);
+    }
+    selectEl.innerHTML = opts.join('');
+  }
+
+  function formatTime(hhmm) {
+    const [h, m] = hhmm.split(':').map(Number);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${m.toString().padStart(2, '0')} ${period}`;
+  }
+
+  async function load() {
+    if (!token) { showError(); return; }
+    try {
+      const res = await HVA_API.get({ action: 'teacher', token });
+      if (!res.ok) { showError(); return; }
+      render(res);
+    } catch (e) {
+      showError();
+    }
+  }
+
+  function showError() {
+    el('loadingState').style.display = 'none';
+    el('errorState').style.display = '';
+  }
+
+  function render(data) {
+    el('loadingState').style.display = 'none';
+    el('mainState').style.display = '';
+
+    el('tGrade').textContent = data.grade;
+    el('tTeacher').textContent = data.teacher;
+    el('tCode').textContent = data.parentCode;
+
+    timeOptions(el('startTime'), data.startTime);
+    timeOptions(el('endTime'), data.endTime);
+    el('incrementMin').value = String(data.incrementMin);
+
+    if (!data.bookings.length) {
+      el('bookingList').innerHTML = `<div class="empty-state" style="padding:20px 0;">No sign-ups yet. Check back closer to conference dates.</div>`;
+    } else {
+      el('bookingList').innerHTML = data.bookings.map((b) => `
+        <div class="booking-item">
+          <div>
+            <div class="who">${b.studentName} · ${b.parentName}</div>
+            <div class="when">${b.dayLabel} · ${formatTime(b.start)}–${formatTime(b.end)}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+  }
+
+  el('saveBtn').addEventListener('click', async () => {
+    el('saveError').classList.remove('show');
+    el('saveSuccess').classList.remove('show');
+    const startTime = el('startTime').value;
+    const endTime = el('endTime').value;
+    const incrementMin = Number(el('incrementMin').value);
+
+    if (startTime >= endTime) {
+      el('saveError').textContent = 'End time needs to be after start time.';
+      el('saveError').classList.add('show');
+      return;
+    }
+
+    el('saveBtn').disabled = true;
+    el('saveBtnText').innerHTML = '<span class="spinner"></span>';
+    try {
+      const res = await HVA_API.post({ action: 'updateSchedule', token, startTime, endTime, incrementMin });
+      if (!res.ok) {
+        el('saveError').textContent = res.error || 'Something went wrong saving your schedule.';
+        el('saveError').classList.add('show');
+        return;
+      }
+      render(res);
+      el('saveSuccess').classList.add('show');
+    } catch (e) {
+      el('saveError').textContent = 'Could not reach the server. Please try again.';
+      el('saveError').classList.add('show');
+    } finally {
+      el('saveBtn').disabled = false;
+      el('saveBtnText').textContent = 'Save My Schedule';
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>

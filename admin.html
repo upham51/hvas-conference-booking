@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Principal Dashboard · Hood View Adventist School</title>
+<link rel="icon" href="assets/logo-full.png" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="topbar-dark">
+  <div class="wrap admin-shell">
+    <div class="topbar" style="padding-top:0;">
+      <div class="brand">
+        <img src="assets/logo-full.png" alt="Hood View Adventist School" />
+        <div>
+          <div class="school-name">Hood View Adventist School</div>
+          <div class="school-sub">Principal Dashboard</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap admin-shell">
+
+  <!-- PIN GATE -->
+  <div id="pinGate" class="pin-gate card fade-in">
+    <div class="card-pad">
+      <h2 style="font-size:20px; margin-bottom:6px;">Enter Admin PIN</h2>
+      <p class="lead" style="margin-bottom:18px; font-size:14px;">This view shows every class and every family sign-up.</p>
+      <input id="pinInput" class="code-input" style="font-size:22px;" type="password" maxlength="10" />
+      <div class="alert alert-error" id="pinError"></div>
+      <button class="btn btn-primary" id="pinSubmit"><span id="pinSubmitText">Unlock Dashboard</span></button>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div id="dashboard" style="display:none;">
+    <div class="hero" style="padding-top:36px;">
+      <span class="eyebrow">Nov 4 – 5, 2026</span>
+      <h1 style="font-size:34px;">All Conferences, One View</h1>
+      <p class="lead">Live sign-ups across every classroom, updated in real time.</p>
+    </div>
+
+    <div class="stat-row">
+      <div class="stat-card"><div class="num" id="statBooked">–</div><div class="lbl">Conferences Booked</div></div>
+      <div class="stat-card"><div class="num" id="statOpen">–</div><div class="lbl">Slots Still Open</div></div>
+      <div class="stat-card"><div class="num" id="statClasses">–</div><div class="lbl">Classrooms</div></div>
+      <div class="stat-card"><div class="num" id="statPct">–</div><div class="lbl">Overall Fill Rate</div></div>
+    </div>
+
+    <div class="class-table" id="classTable"></div>
+
+    <div style="text-align:center; margin-top:28px;">
+      <button class="btn btn-ghost" id="refreshBtn" style="padding:10px 22px; font-size:13.5px;">↻ Refresh</button>
+    </div>
+  </div>
+
+  <footer>Hood View Adventist School · Principal Dashboard</footer>
+</div>
+
+<script src="config.js"></script>
+<script src="api.js"></script>
+<script>
+  const el = (id) => document.getElementById(id);
+  let PIN = sessionStorage.getItem('hva_admin_pin') || '';
+
+  function formatTime(hhmm) {
+    const [h, m] = hhmm.split(':').map(Number);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${m.toString().padStart(2, '0')} ${period}`;
+  }
+
+  async function tryLoad(pin) {
+    const res = await HVA_API.get({ action: 'admin', pin });
+    return res;
+  }
+
+  el('pinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('pinSubmit').click(); });
+
+  el('pinSubmit').addEventListener('click', async () => {
+    const pin = el('pinInput').value.trim();
+    el('pinError').classList.remove('show');
+    if (!pin) return;
+    el('pinSubmit').disabled = true;
+    el('pinSubmitText').innerHTML = '<span class="spinner"></span>';
+    try {
+      const res = await tryLoad(pin);
+      if (!res.ok) {
+        el('pinError').textContent = res.error || 'Incorrect PIN.';
+        el('pinError').classList.add('show');
+        return;
+      }
+      sessionStorage.setItem('hva_admin_pin', pin);
+      PIN = pin;
+      el('pinGate').style.display = 'none';
+      el('dashboard').style.display = '';
+      renderDashboard(res);
+    } catch (e) {
+      el('pinError').textContent = 'Could not reach the server.';
+      el('pinError').classList.add('show');
+    } finally {
+      el('pinSubmit').disabled = false;
+      el('pinSubmitText').textContent = 'Unlock Dashboard';
+    }
+  });
+
+  el('refreshBtn').addEventListener('click', async () => {
+    const res = await tryLoad(PIN);
+    if (res.ok) renderDashboard(res);
+  });
+
+  function renderDashboard(data) {
+    const totalOpen = data.totals.totalSlots - data.totals.totalBooked;
+    const pct = data.totals.totalSlots ? Math.round((data.totals.totalBooked / data.totals.totalSlots) * 100) : 0;
+    el('statBooked').textContent = data.totals.totalBooked;
+    el('statOpen').textContent = totalOpen;
+    el('statClasses').textContent = data.classes.length;
+    el('statPct').textContent = pct + '%';
+
+    el('classTable').innerHTML = data.classes.map((c, i) => {
+      const cPct = c.totalSlots ? Math.round((c.booked / c.totalSlots) * 100) : 0;
+      const teacherLink = `${window.location.origin}${window.location.pathname.replace('admin.html','')}teacher.html?t=${c.teacherToken}`;
+      return `
+        <div class="class-row" data-idx="${i}">
+          <div class="class-row-head">
+            <div class="who">
+              <div class="grade">${c.grade}</div>
+              <div class="teacher">${c.teacher} · Code: <strong>${c.parentCode}</strong></div>
+            </div>
+            <div class="fill-bar-wrap">
+              <div class="fill-bar"><div style="width:${cPct}%"></div></div>
+              <div class="fill-pct">${c.booked}/${c.totalSlots}</div>
+            </div>
+          </div>
+          <div class="class-detail" id="detail-${i}">
+            <p style="font-size:13px; color:var(--ink-soft); margin:0 0 10px;">
+              Hours: ${formatTime(c.startTime)}–${formatTime(c.endTime)}, ${c.incrementMin}-min slots &nbsp;·&nbsp;
+              Teacher link: <span class="copy-link" data-link="${teacherLink}">copy</span>
+            </p>
+            ${c.bookings.length ? `
+              <table>
+                <tr><th>Day</th><th>Time</th><th>Student</th><th>Parent</th><th>Contact</th></tr>
+                ${c.bookings.map(b => `
+                  <tr>
+                    <td>${b.dayLabel}</td>
+                    <td>${formatTime(b.start)}</td>
+                    <td>${b.studentName}</td>
+                    <td>${b.parentName}</td>
+                    <td>${b.email}${b.phone ? ' · ' + b.phone : ''}</td>
+                  </tr>
+                `).join('')}
+              </table>
+            ` : `<div class="empty-state" style="padding:14px 0;">No sign-ups yet.</div>`}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    document.querySelectorAll('.class-row').forEach((row) => {
+      row.addEventListener('click', (e) => {
+        if (e.target.classList.contains('copy-link')) {
+          navigator.clipboard.writeText(e.target.dataset.link);
+          const orig = e.target.textContent;
+          e.target.textContent = 'copied!';
+          setTimeout(() => { e.target.textContent = orig; }, 1200);
+          return;
+        }
+        const idx = row.dataset.idx;
+        el('detail-' + idx).classList.toggle('open');
+      });
+    });
+  }
+
+  // auto-unlock if PIN already stored this session
+  if (PIN) {
+    tryLoad(PIN).then((res) => {
+      if (res.ok) {
+        el('pinGate').style.display = 'none';
+        el('dashboard').style.display = '';
+        renderDashboard(res);
+      }
+    });
+  }
+</script>
+</body>
+</html>

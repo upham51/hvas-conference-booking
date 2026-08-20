@@ -1,0 +1,6 @@
+name = "hvjaparentteacherconference"
+account_id = "010aefc1468df1f9434db207040d5de2"
+compatibility_date = "2025-01-01"
+
+[assets]
+directory = "."
