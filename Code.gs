@@ -13,9 +13,15 @@ const DEFAULT_START = '14:00';
 const DEFAULT_END = '19:00';
 const DEFAULT_INCREMENT = 15;
 
-// The live site's own URL, used to build the "manage my booking" link that
-// goes out in the confirmation email.
-const SITE_BASE_URL = 'https://hvjaparentteacherconference.upham51.workers.dev/';
+// The address used to build the "manage my booking" link in confirmation
+// emails. This is the school's own short link, which redirects to wherever the
+// booking site is hosted, so the links in already-sent emails keep working if
+// the site ever moves. The redirect lives in the Wix dashboard under
+// SEO & GEO -> Tools and settings -> URL Redirect Manager; if it is ever
+// removed, these cancellation links break, so point this straight at the host
+// instead of deleting the redirect.
+// Verified that the redirect preserves the ?manage= token.
+const SITE_BASE_URL = 'https://hvja.org/parentteacher';
 
 // School's own time zone, used when deciding "is tomorrow a conference day"
 // for the automatic reminder emails.
