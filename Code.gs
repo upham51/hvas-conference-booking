@@ -63,8 +63,35 @@ const CLASS_SEED = [
   { classId: 'saliba',   grade: '8th Grade',      teacher: 'Mr. Saliba' },
 ];
 
+// Families cannot book a slot that starts less than this many minutes from
+// now (school time). Gives the teacher notice and stops someone booking a
+// time that already started.
+const BOOKING_CUTOFF_MIN = 120;
+
+const ALLOWED_INCREMENTS = [10, 15, 20, 30];
+const MAX_NAME_LEN = 100;
+const MAX_EMAIL_LEN = 100;
+const MAX_PHONE_LEN = 30;
+const MIN_ADMIN_PIN_LEN = 8;
+const PIN_MAX_FAILS = 5;
+const PIN_LOCKOUT_SEC = 15 * 60;
+const REQUEST_CACHE_SEC = 15 * 60;
+const LOCK_WAIT_MS = 30000;
+const MAIL_FROM_NAME = 'Hood View Adventist School';
+
+const BUSY_MSG = 'The site is busy right now. Please wait a moment and try again. Nothing was booked or changed.';
+const BAD_TOKEN_MSG = 'This link is no longer valid, it may already have been used. Contact the school office for help.';
+
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Running setup again would wipe every booking and give every teacher a
+  // new private link. Refuse once real data exists.
+  const existing = ss.getSheetByName(SHEET_NAME_BOOKINGS);
+  if (existing && existing.getLastRow() > 1) {
+    throw new Error('setup() was stopped: the Bookings tab already has ' +
+      (existing.getLastRow() - 1) + ' booking(s), and setup would erase them. Nothing was changed.');
+  }
 
   let classes = ss.getSheetByName(SHEET_NAME_CLASSES);
   if (!classes) classes = ss.insertSheet(SHEET_NAME_CLASSES);
@@ -82,8 +109,8 @@ function setup() {
       c.teacher,
       c.classId.toUpperCase(),
       Utilities.getUuid().split('-')[0] + Utilities.getUuid().split('-')[1],
-      DEFAULT_START,
-      DEFAULT_END,
+      "'" + DEFAULT_START,
+      "'" + DEFAULT_END,
       DEFAULT_INCREMENT,
       true,
     ];
@@ -91,7 +118,7 @@ function setup() {
   classes.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
   classes.autoResizeColumns(1, 9);
 
-  let bookings = ss.getSheetByName(SHEET_NAME_BOOKINGS);
+  let bookings = existing;
   if (!bookings) bookings = ss.insertSheet(SHEET_NAME_BOOKINGS);
   bookings.clear();
   bookings.appendRow([
@@ -101,16 +128,12 @@ function setup() {
   ]);
   bookings.setFrozenRows(1);
 
-  const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('ADMIN_PIN')) {
-    props.setProperty('ADMIN_PIN', '1289');
-  }
-
   ss.setActiveSheet(classes);
-  SpreadsheetApp.getUi().alert(
-    'Setup complete! Open the Classes tab to see each teacher\'s parent code ' +
-    'and private schedule link. Default admin PIN is 1289, change it by ' +
-    'running setAdminPin() with your own value.'
+  notify_(
+    'Setup complete. Open the Classes tab to see each teacher\'s parent code ' +
+    'and private schedule link. Before anyone uses the principal dashboard, set ' +
+    'an admin PIN of at least ' + MIN_ADMIN_PIN_LEN + ' characters: Project Settings > ' +
+    'Script properties > ADMIN_PIN.'
   );
 }
 
@@ -124,16 +147,12 @@ function migrateAddColumns_v2() {
   const toAdd = ['ManageToken', 'ReminderSent'].filter(function (h) {
     return headers.indexOf(h) === -1;
   });
-  if (!toAdd.length) {
-    SpreadsheetApp.getUi().alert('Already up to date, nothing to add.');
-    return;
+  if (toAdd.length) {
+    sheet.getRange(1, headers.length + 1, 1, toAdd.length).setValues([toAdd]);
   }
-  sheet.getRange(1, headers.length + 1, 1, toAdd.length).setValues([toAdd]);
-  SpreadsheetApp.getUi().alert(
-    'Added columns: ' + toAdd.join(', ') + '. New bookings from now on will ' +
-    'support self-serve cancel links and reminder emails. Existing bookings ' +
-    'made before this upgrade will not have a cancel link.'
-  );
+  notify_(toAdd.length
+    ? 'Added columns: ' + toAdd.join(', ') + '. Existing bookings made before this upgrade will not have a cancel link.'
+    : 'Already up to date, nothing to add.');
 }
 
 // One-time setup for the automatic day-before reminder emails. Safe to
@@ -149,16 +168,62 @@ function createDailyReminderTrigger() {
     .timeBased()
     .everyDays(1)
     .atHour(9)
+    .inTimezone(SCHOOL_TIMEZONE)
     .create();
-  SpreadsheetApp.getUi().alert(
+  notify_(
     'Reminder emails are now scheduled. Every day at around 9am, anyone ' +
     'booked for the next day\'s conferences will get a reminder automatically.'
   );
 }
 
+// Run from the Apps Script editor before sending the link to families. It
+// changes nothing, it only reports what is and isn't ready. Results show in
+// the execution log (and as a popup if the spreadsheet is open).
+function checkLaunchReadiness() {
+  const lines = [];
+  const reminder = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'sendDailyReminders_';
+  });
+  lines.push((reminder ? 'OK   ' : 'FIX  ') + 'Day-before reminder trigger ' +
+    (reminder ? 'is installed.' : 'is NOT installed. Run createDailyReminderTrigger().'));
+
+  const pin = PropertiesService.getScriptProperties().getProperty('ADMIN_PIN') || '';
+  const pinOk = pin.length >= MIN_ADMIN_PIN_LEN && pin !== '1289';
+  lines.push((pinOk ? 'OK   ' : 'FIX  ') + 'Admin PIN ' + (pinOk
+    ? 'is set and long enough.'
+    : 'is missing, too short, or still the old default. The dashboard stays locked until ADMIN_PIN in Script properties has ' + MIN_ADMIN_PIN_LEN + '+ characters.'));
+
+  const quota = MailApp.getRemainingDailyQuota();
+  lines.push((quota >= 500 ? 'OK   ' : 'WARN ') + 'Emails left today: ' + quota +
+    '. Each booking sends 2 to 3 emails, so 150 families need about 450.');
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ssTz = ss.getSpreadsheetTimeZone();
+  const scriptTz = Session.getScriptTimeZone();
+  lines.push((ssTz === scriptTz ? 'OK   ' : 'FIX  ') + 'Time zones: spreadsheet ' + ssTz +
+    ', script ' + scriptTz + (ssTz === scriptTz ? '.' : '. These must match or class hours will be read wrong.'));
+
+  const sheet = getSheet_(SHEET_NAME_BOOKINGS);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const hasCols = ['BookingID', 'ManageToken', 'ReminderSent'].every(function (h) { return headers.indexOf(h) !== -1; });
+  lines.push((hasCols ? 'OK   ' : 'FIX  ') + 'Bookings columns ' + (hasCols ? 'are complete.' : 'are missing. Run migrateAddColumns_v2().'));
+  lines.push('INFO ' + (sheet.getLastRow() - 1) + ' booking(s) on the sheet right now.');
+
+  const report = lines.join('\n');
+  Logger.log(report);
+  notify_(report);
+  return report;
+}
+
+// Popup when run from the open spreadsheet, log line otherwise.
+function notify_(msg) {
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg); } catch (err) { /* run from the editor */ }
+}
+
 function setAdminPin(newPin) {
-  if (!newPin) {
-    throw new Error('Call setAdminPin("yourNewPin") with a value.');
+  if (!newPin || String(newPin).length < MIN_ADMIN_PIN_LEN) {
+    throw new Error('The admin PIN must be at least ' + MIN_ADMIN_PIN_LEN + ' characters.');
   }
   PropertiesService.getScriptProperties().setProperty('ADMIN_PIN', String(newPin));
 }
@@ -173,7 +238,8 @@ function doGet(e) {
     if (action === 'manage') return jsonOut(getManageView_(e.parameter.token));
     return jsonOut({ ok: false, error: 'Unknown action.' });
   } catch (err) {
-    return jsonOut({ ok: false, error: String(err) });
+    console.error(err);
+    return jsonOut({ ok: false, error: 'Something went wrong on our end. Please try again in a moment.' });
   }
 }
 
@@ -184,10 +250,11 @@ function doPost(e) {
     if (action === 'book') return jsonOut(bookSlot_(body));
     if (action === 'updateSchedule') return jsonOut(updateSchedule_(body));
     if (action === 'cancel') return jsonOut(cancelBooking_(body));
-    if (action === 'manageCancel') return jsonOut(cancelByToken_(body.token));
+    if (action === 'manageCancel') return jsonOut(cancelByToken_(body));
     return jsonOut({ ok: false, error: 'Unknown action.' });
   } catch (err) {
-    return jsonOut({ ok: false, error: String(err) });
+    console.error(err);
+    return jsonOut({ ok: false, error: 'Something went wrong on our end. Nothing was changed. Please try again in a moment.' });
   }
 }
 
@@ -214,14 +281,49 @@ function readTable_(sheet) {
   });
 }
 
+// ---- Locking and repeat-request protection ----
+
+// Runs fn while holding the script-wide lock. If the lock can't be had in
+// 30 seconds, returns a friendly "busy" answer instead of throwing.
+function withLock_(fn) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(LOCK_WAIT_MS)) return { ok: false, error: BUSY_MSG, code: 'busy' };
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// The browser sends a random requestId with every booking and cancel, and
+// sends the same one again if it has to retry. The first result is kept for
+// 15 minutes, so a retry gets the original answer instead of booking twice.
+function cleanRequestId_(id) {
+  const s = String(id || '');
+  return /^[A-Za-z0-9-]{8,64}$/.test(s) ? s : '';
+}
+function getCachedResult_(requestId) {
+  if (!requestId) return null;
+  const hit = CacheService.getScriptCache().get('req_' + requestId);
+  return hit ? JSON.parse(hit) : null;
+}
+function putCachedResult_(requestId, result) {
+  if (!requestId) return;
+  CacheService.getScriptCache().put('req_' + requestId, JSON.stringify(result), REQUEST_CACHE_SEC);
+}
+
 // Writes one new row to Bookings by column name rather than a fixed
 // position, so it never misaligns columns if the sheet has (or is missing)
-// newer columns like ManageToken and ReminderSent.
+// newer columns like ManageToken and ReminderSent. Every text value gets a
+// leading apostrophe, which tells Sheets "store this exactly as typed": no
+// turning "18:45" into a time, a phone into a number, or "=..." into a formula.
 function appendBookingRow_(fields) {
   const sheet = getSheet_(SHEET_NAME_BOOKINGS);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const row = headers.map(function (h) {
-    return Object.prototype.hasOwnProperty.call(fields, h) ? fields[h] : '';
+    if (!Object.prototype.hasOwnProperty.call(fields, h)) return '';
+    const v = fields[h];
+    return (typeof v === 'string' && v !== '') ? "'" + v : v;
   });
   sheet.appendRow(row);
 }
@@ -252,6 +354,8 @@ function findClassById_(classId) {
   return classes.find(function (c) { return c.ClassID === classId; }) || null;
 }
 
+// ---- Time helpers ----
+
 // Google Sheets silently converts strings like "14:00" into its own time
 // serial value when they're written to a cell. When we read that cell back,
 // Apps Script hands it to us as a JS Date (epoch-anchored to Dec 30 1899,
@@ -265,13 +369,28 @@ function minutesFromTimeValue_(v) {
   if (typeof v === 'number') {
     return Math.round(v * 24 * 60);
   }
-  const parts = String(v).split(':');
+  const parts = String(v).replace(/^'/, '').split(':');
   return Number(parts[0]) * 60 + Number(parts[1]);
 }
 
 function toHHMM_(m) {
   const h = Math.floor(m / 60), mm = m % 60;
   return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
+}
+
+// Every booking time is compared, sorted and returned through this, so a
+// cell Sheets turned into a time value and a cell stored as "18:45" text
+// always look the same.
+function slotKey_(v) {
+  return toHHMM_(minutesFromTimeValue_(v));
+}
+
+// "18:45" -> "6:45 PM", for emails.
+function formatTime12_(hhmm) {
+  const m = minutesFromTimeValue_(hhmm);
+  const h = Math.floor(m / 60), mm = m % 60;
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return h12 + ':' + (mm < 10 ? '0' : '') + mm + ' ' + (h >= 12 ? 'PM' : 'AM');
 }
 
 function generateSlots_(cls) {
@@ -285,10 +404,42 @@ function generateSlots_(cls) {
   return slots;
 }
 
+// True if a slot on this conference day starts too soon (or already started)
+// to be booked, judged by the clock at the school.
+function isPastCutoff_(dayDef, slotStart) {
+  const now = new Date();
+  const today = Utilities.formatDate(now, SCHOOL_TIMEZONE, 'yyyy-MM-dd');
+  if (dayDef.date < today) return true;
+  if (dayDef.date > today) return false;
+  const nowMin = Number(Utilities.formatDate(now, SCHOOL_TIMEZONE, 'H')) * 60 +
+    Number(Utilities.formatDate(now, SCHOOL_TIMEZONE, 'm'));
+  return minutesFromTimeValue_(slotStart) < nowMin + BOOKING_CUTOFF_MIN;
+}
+
+// True if the slot overlaps any booking on that day. Uses overlap rather
+// than "same start time" so a booking can never be hidden by a grid change.
+function slotOverlapsBooking_(dayKey, slot, bookings) {
+  const s = minutesFromTimeValue_(slot.start), e = minutesFromTimeValue_(slot.end);
+  return bookings.some(function (b) {
+    if (b.Day !== dayKey) return false;
+    const bs = minutesFromTimeValue_(b.StartTime), be = minutesFromTimeValue_(b.EndTime);
+    return bs < e && s < be;
+  });
+}
+
+function sortBookings_(list) {
+  return list.sort(function (a, b) {
+    if (a.Day !== b.Day) return a.Day < b.Day ? -1 : 1;
+    return minutesFromTimeValue_(a.StartTime) - minutesFromTimeValue_(b.StartTime);
+  });
+}
+
 function getBookingsForClass_(classId) {
   const bookings = readTable_(getSheet_(SHEET_NAME_BOOKINGS));
   return bookings.filter(function (b) { return b.ClassID === classId; });
 }
+
+// ---- Parent: schedule and booking ----
 
 function getScheduleForCode_(code) {
   const cls = findClassByCode_(code);
@@ -298,16 +449,14 @@ function getScheduleForCode_(code) {
   const bookings = getBookingsForClass_(cls.ClassID);
 
   const days = CONF_DAYS.map(function (d) {
-    const taken = {};
-    bookings.filter(function (b) { return b.Day === d.key; }).forEach(function (b) {
-      taken[b.StartTime] = true;
-    });
     return {
       key: d.key,
       date: d.date,
       label: d.label,
       slots: slots.map(function (s) {
-        return { start: s.start, end: s.end, taken: !!taken[s.start] };
+        const taken = slotOverlapsBooking_(d.key, s, bookings);
+        const closed = !taken && isPastCutoff_(d, s.start);
+        return { start: s.start, end: s.end, taken: taken || closed, closed: closed };
       }),
     };
   });
@@ -317,16 +466,38 @@ function getScheduleForCode_(code) {
     classId: cls.ClassID,
     grade: cls.Grade,
     teacher: cls.Teacher,
+    incrementMin: Number(cls.IncrementMin) || DEFAULT_INCREMENT,
     days: days,
   };
 }
 
+function isValidEmail_(s) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s);
+}
+
 function bookSlot_(body) {
+  const requestId = cleanRequestId_(body.requestId);
+  const cached = getCachedResult_(requestId);
+  if (cached) return cached;
+
   const required = ['code', 'day', 'start', 'parentName', 'studentName', 'email'];
   for (let i = 0; i < required.length; i++) {
     if (!body[required[i]] || !String(body[required[i]]).trim()) {
       return { ok: false, error: 'Please fill in every field.' };
     }
+  }
+  const parentName = String(body.parentName).trim();
+  const studentName = String(body.studentName).trim();
+  const email = String(body.email).trim();
+  const phone = body.phone ? String(body.phone).trim() : '';
+  if (parentName.length > MAX_NAME_LEN || studentName.length > MAX_NAME_LEN) {
+    return { ok: false, error: 'Names can be up to ' + MAX_NAME_LEN + ' characters.' };
+  }
+  if (email.length > MAX_EMAIL_LEN || !isValidEmail_(email)) {
+    return { ok: false, error: 'That email address doesn\'t look complete. Please check it, we send your confirmation and cancel link there.' };
+  }
+  if (phone.length > MAX_PHONE_LEN) {
+    return { ok: false, error: 'Phone number can be up to ' + MAX_PHONE_LEN + ' characters.' };
   }
 
   const cls = findClassByCode_(body.code);
@@ -335,46 +506,46 @@ function bookSlot_(body) {
   const dayDef = CONF_DAYS.find(function (d) { return d.key === body.day; });
   if (!dayDef) return { ok: false, error: 'Invalid conference day.' };
 
-  const validSlots = generateSlots_(cls);
-  const slot = validSlots.find(function (s) { return s.start === body.start; });
-  if (!slot) return { ok: false, error: 'That time slot is no longer available. Please pick another.' };
+  const slot = generateSlots_(cls).find(function (s) { return s.start === slotKey_(body.start); });
+  if (!slot) {
+    return { ok: false, code: 'slot_gone', error: 'That time is no longer on the schedule. Please pick another.' };
+  }
+  if (isPastCutoff_(dayDef, slot.start)) {
+    return { ok: false, code: 'slot_closed', error: 'That time is too close to book online now. Please pick a later time or contact the school office.' };
+  }
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
+  let mail = null;
+  const result = withLock_(function () {
+    // A retry may have waited on the lock while the first attempt finished.
+    const again = getCachedResult_(requestId);
+    if (again) return again;
+
     const bookings = getBookingsForClass_(cls.ClassID);
-    const alreadyTaken = bookings.some(function (b) {
-      return b.Day === body.day && b.StartTime === body.start;
-    });
-    if (alreadyTaken) {
-      return { ok: false, error: 'Sorry, someone just booked that slot. Please pick another.' };
+    if (slotOverlapsBooking_(body.day, slot, bookings)) {
+      return { ok: false, code: 'slot_taken', error: 'Sorry, someone just booked that time. Please pick another.' };
     }
 
-    const bookingId = Utilities.getUuid();
     // Only issue a manage token (and therefore a cancel link) once the sheet
-    // has been migrated to support it. Older sheets keep working exactly as
-    // before, they just won't get a cancel link in the email.
+    // has been migrated to support it.
     const manageToken = bookingHeadersHave_('ManageToken') ? Utilities.getUuid() : null;
 
     appendBookingRow_({
-      BookingID: bookingId,
+      BookingID: Utilities.getUuid(),
       ClassID: cls.ClassID,
       Day: body.day,
       StartTime: slot.start,
       EndTime: slot.end,
-      ParentName: String(body.parentName).trim(),
-      StudentName: String(body.studentName).trim(),
-      Email: String(body.email).trim(),
-      Phone: body.phone ? String(body.phone).trim() : '',
+      ParentName: parentName,
+      StudentName: studentName,
+      Email: email,
+      Phone: phone,
       Timestamp: new Date(),
       ManageToken: manageToken || '',
       ReminderSent: '',
     });
+    SpreadsheetApp.flush();
 
-    sendConfirmation_(cls, dayDef, slot, body, manageToken);
-    sendTeacherNotification_(cls, dayDef, slot, body);
-
-    return {
+    const res = {
       ok: true,
       confirmation: {
         teacher: cls.Teacher,
@@ -385,28 +556,40 @@ function bookSlot_(body) {
         manageToken: manageToken,
       },
     };
-  } finally {
-    lock.releaseLock();
+    putCachedResult_(requestId, res);
+    mail = { manageToken: manageToken };
+    return res;
+  });
+
+  // Emails go out after the lock is released, so one family's emails never
+  // hold up another family's booking.
+  if (mail) {
+    const info = { parentName: parentName, studentName: studentName, email: email, phone: phone };
+    sendConfirmation_(cls, dayDef, slot, info, mail.manageToken);
+    sendTeacherNotification_(cls, dayDef, slot, info);
   }
+  return result;
 }
 
 // Original cancel path: requires knowing the exact bookingId and the email
-// used to book. Kept for backward compatibility (e.g. office/admin tooling).
-// Parent-facing cancels go through cancelByToken_ instead, see below.
+// used to book. Not used by the site; kept for office tooling. Parent-facing
+// cancels go through cancelByToken_ instead, see below.
 function cancelBooking_(body) {
   if (!body.bookingId || !body.email) return { ok: false, error: 'Missing booking info.' };
-  const sheet = getSheet_(SHEET_NAME_BOOKINGS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idCol = headers.indexOf('BookingID');
-  const emailCol = headers.indexOf('Email');
-  for (let r = 1; r < values.length; r++) {
-    if (values[r][idCol] === body.bookingId && values[r][emailCol] === body.email) {
-      sheet.deleteRow(r + 1);
-      return { ok: true };
+  return withLock_(function () {
+    const sheet = getSheet_(SHEET_NAME_BOOKINGS);
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0];
+    const idCol = headers.indexOf('BookingID');
+    const emailCol = headers.indexOf('Email');
+    for (let r = 1; r < values.length; r++) {
+      if (values[r][idCol] === body.bookingId && values[r][emailCol] === body.email) {
+        sheet.deleteRow(r + 1);
+        return { ok: true };
+      }
     }
-  }
-  return { ok: false, error: 'Booking not found.' };
+    return { ok: false, error: 'Booking not found.' };
+  });
 }
 
 // Self-serve cancel, used by the "manage my booking" link in the
@@ -420,7 +603,7 @@ function findBookingByManageToken_(token) {
   const tokenCol = headers.indexOf('ManageToken');
   if (tokenCol === -1) return null;
   for (let r = 1; r < values.length; r++) {
-    if (values[r][tokenCol] && values[r][tokenCol] === token) {
+    if (values[r][tokenCol] && String(values[r][tokenCol]) === String(token)) {
       const obj = {};
       headers.forEach(function (h, i) { obj[h] = values[r][i]; });
       obj.__row = r + 1;
@@ -432,12 +615,7 @@ function findBookingByManageToken_(token) {
 
 function getManageView_(token) {
   const booking = findBookingByManageToken_(token);
-  if (!booking) {
-    return {
-      ok: false,
-      error: 'This link is no longer valid, it may already have been used. Contact the school office for help.',
-    };
-  }
+  if (!booking) return { ok: false, error: BAD_TOKEN_MSG };
   const cls = findClassById_(booking.ClassID);
   const dayDef = CONF_DAYS.find(function (d) { return d.key === booking.Day; });
   return {
@@ -446,36 +624,55 @@ function getManageView_(token) {
     grade: cls ? cls.Grade : '',
     parentCode: cls ? cls.ParentCode : '',
     dayLabel: dayDef ? dayDef.label : booking.Day,
-    start: toHHMM_(minutesFromTimeValue_(booking.StartTime)),
-    end: toHHMM_(minutesFromTimeValue_(booking.EndTime)),
+    start: slotKey_(booking.StartTime),
+    end: slotKey_(booking.EndTime),
     studentName: booking.StudentName,
     parentName: booking.ParentName,
   };
 }
 
-function cancelByToken_(token) {
-  const booking = findBookingByManageToken_(token);
-  if (!booking) {
-    return {
-      ok: false,
-      error: 'This link is no longer valid, it may already have been used. Contact the school office for help.',
-    };
-  }
-  const cls = findClassById_(booking.ClassID);
-  const sheet = getSheet_(SHEET_NAME_BOOKINGS);
-  sheet.deleteRow(booking.__row);
-  return { ok: true, parentCode: cls ? cls.ParentCode : '', classId: booking.ClassID };
+function cancelByToken_(body) {
+  const token = body && body.token;
+  const requestId = cleanRequestId_(body && body.requestId);
+  const cached = getCachedResult_(requestId);
+  if (cached) return cached;
+
+  let cancelled = null;
+  const result = withLock_(function () {
+    const again = getCachedResult_(requestId);
+    if (again) return again;
+    // Find the row again inside the lock: another cancel may have shifted
+    // the rows since this request started.
+    const booking = findBookingByManageToken_(token);
+    if (!booking) return { ok: false, code: 'bad_token', error: BAD_TOKEN_MSG };
+    getSheet_(SHEET_NAME_BOOKINGS).deleteRow(booking.__row);
+    SpreadsheetApp.flush();
+    const cls = findClassById_(booking.ClassID);
+    const res = { ok: true, parentCode: cls ? cls.ParentCode : '', classId: booking.ClassID };
+    putCachedResult_(requestId, res);
+    cancelled = { booking: booking, cls: cls };
+    return res;
+  });
+
+  if (cancelled) sendCancellationEmails_(cancelled.cls, cancelled.booking);
+  return result;
 }
 
-function sendConfirmation_(cls, dayDef, slot, body, manageToken) {
+// ---- Email ----
+
+function sendMail_(to, subject, body) {
+  MailApp.sendEmail(String(to).trim(), subject, body, { name: MAIL_FROM_NAME });
+}
+
+function sendConfirmation_(cls, dayDef, slot, info, manageToken) {
   try {
-    const subject = 'Conference Confirmed: ' + dayDef.label + ' with ' + cls.Teacher;
-    let msg = 'Hi ' + body.parentName + ',\n\n' +
+    const subject = 'Conference confirmed: ' + dayDef.label + ' with ' + cls.Teacher;
+    let msg = 'Hi ' + info.parentName + ',\n\n' +
       'Your parent-teacher conference is confirmed:\n\n' +
-      'Student: ' + body.studentName + '\n' +
+      'Student: ' + info.studentName + '\n' +
       'Teacher: ' + cls.Teacher + ' (' + cls.Grade + ')\n' +
       'Day: ' + dayDef.label + '\n' +
-      'Time: ' + slot.start + ' - ' + slot.end + '\n\n';
+      'Time: ' + formatTime12_(slot.start) + ' to ' + formatTime12_(slot.end) + '\n\n';
     if (manageToken) {
       msg += 'Need to cancel or pick a different time? Use this link:\n' +
         SITE_BASE_URL + '?manage=' + manageToken + '\n\n';
@@ -483,40 +680,80 @@ function sendConfirmation_(cls, dayDef, slot, body, manageToken) {
       msg += 'If your plans change, please contact the school office.\n\n';
     }
     msg += 'Hood View Adventist School';
-    MailApp.sendEmail(String(body.email).trim(), subject, msg);
+    sendMail_(info.email, subject, msg);
   } catch (err) {
     // Email failure should never block a successful booking.
+    console.error(err);
   }
 }
 
-function sendTeacherNotification_(cls, dayDef, slot, body) {
-  const teacherEmails = TEACHER_EMAILS[cls.ClassID];
-  if (!teacherEmails || !teacherEmails.length) return; // not configured yet for this class
-  const subject = 'New sign-up: ' + body.studentName + ', ' + dayDef.label + ' ' + slot.start;
-  const msg = 'Hi,\n\n' +
-    'A parent just booked a conference time with you:\n\n' +
-    'Student: ' + body.studentName + '\n' +
-    'Parent: ' + body.parentName + '\n' +
-    'Day: ' + dayDef.label + '\n' +
-    'Time: ' + slot.start + ' - ' + slot.end + '\n' +
-    'Contact: ' + body.email + (body.phone ? ' / ' + body.phone : '') + '\n\n' +
-    'View your full schedule any time at your private link.\n\n' +
-    'Hood View Adventist School';
+function sendToTeachers_(classId, subject, msg) {
+  const teacherEmails = TEACHER_EMAILS[classId];
+  if (!teacherEmails || !teacherEmails.length) return; // not configured for this class
   // Send one at a time, and catch per address, so a typo in one teacher's
-  // email (like the unconfirmed Haffner address) never blocks the booking
-  // or the other teacher's notification.
+  // email (like the unconfirmed Haffner address) never blocks the other.
   teacherEmails.forEach(function (addr) {
     try {
-      MailApp.sendEmail(addr, subject, msg);
+      sendMail_(addr, subject, msg);
     } catch (err) {
-      // Never block a booking over a notification failure.
+      console.error(err);
     }
   });
+}
+
+function sendTeacherNotification_(cls, dayDef, slot, info) {
+  const subject = 'New sign-up: ' + info.studentName + ', ' + dayDef.label + ' ' + formatTime12_(slot.start);
+  const msg = 'Hi,\n\n' +
+    'A parent just booked a conference time with you:\n\n' +
+    'Student: ' + info.studentName + '\n' +
+    'Parent: ' + info.parentName + '\n' +
+    'Day: ' + dayDef.label + '\n' +
+    'Time: ' + formatTime12_(slot.start) + ' to ' + formatTime12_(slot.end) + '\n' +
+    'Contact: ' + info.email + (info.phone ? ' / ' + info.phone : '') + '\n\n' +
+    'View your full schedule any time at your private link.\n\n' +
+    'Hood View Adventist School';
+  sendToTeachers_(cls.ClassID, subject, msg);
+}
+
+function sendCancellationEmails_(cls, booking) {
+  const dayDef = CONF_DAYS.find(function (d) { return d.key === booking.Day; });
+  const dayLabel = dayDef ? dayDef.label : booking.Day;
+  const teacherName = cls ? cls.Teacher : booking.ClassID;
+  const time = formatTime12_(slotKey_(booking.StartTime)) + ' to ' + formatTime12_(slotKey_(booking.EndTime));
+
+  try {
+    sendMail_(booking.Email,
+      'Conference cancelled: ' + dayLabel + ' with ' + teacherName,
+      'Hi ' + booking.ParentName + ',\n\n' +
+      'Your parent-teacher conference has been cancelled:\n\n' +
+      'Student: ' + booking.StudentName + '\n' +
+      'Teacher: ' + teacherName + '\n' +
+      'Day: ' + dayLabel + '\n' +
+      'Time: ' + time + '\n\n' +
+      'To pick a new time, go to ' + SITE_BASE_URL +
+      (cls ? ' and enter the classroom code ' + cls.ParentCode : '') + '.\n\n' +
+      'Hood View Adventist School');
+  } catch (err) {
+    console.error(err);
+  }
+
+  sendToTeachers_(booking.ClassID,
+    'Cancelled: ' + booking.StudentName + ', ' + dayLabel + ' ' + formatTime12_(slotKey_(booking.StartTime)),
+    'Hi,\n\n' +
+    'A family cancelled their conference. The time is open again for other families.\n\n' +
+    'Student: ' + booking.StudentName + '\n' +
+    'Parent: ' + booking.ParentName + '\n' +
+    'Day: ' + dayLabel + '\n' +
+    'Time: ' + time + '\n\n' +
+    'Hood View Adventist School');
 }
 
 // Runs once a day (see createDailyReminderTrigger). Sends a reminder to
 // every parent whose conference is tomorrow and who hasn't been reminded
 // yet, then marks them as reminded so they don't get a second one.
+// Emails go out without holding the lock (150 emails would block bookings
+// for minutes); the "reminded" marks are written under the lock, finding
+// each row again by BookingID in case a cancel moved the rows.
 function sendDailyReminders_() {
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -530,45 +767,84 @@ function sendDailyReminders_() {
   const headers = values[0];
   const col = {};
   headers.forEach(function (h, i) { col[h] = i; });
-  if (col.ReminderSent === undefined) return; // sheet not migrated yet
+  if (col.ReminderSent === undefined || col.BookingID === undefined) return; // sheet not migrated
 
+  const classesById = {};
+  readTable_(getSheet_(SHEET_NAME_CLASSES)).forEach(function (c) { classesById[c.ClassID] = c; });
+
+  let sentIds = [];
   for (let r = 1; r < values.length; r++) {
     const row = values[r];
     if (row[col.Day] !== dayDef.key) continue;
     if (row[col.ReminderSent]) continue;
 
     const classId = row[col.ClassID];
-    const cls = findClassById_(classId);
+    const cls = classesById[classId];
     const teacherName = cls ? cls.Teacher : classId;
     const grade = cls ? cls.Grade : '';
-    const email = row[col.Email];
 
     try {
-      const subject = 'Reminder: Conference with ' + teacherName + ' tomorrow';
+      const subject = 'Reminder: conference with ' + teacherName + ' tomorrow';
       const msg = 'Hi ' + row[col.ParentName] + ',\n\n' +
         'Just a reminder, your parent-teacher conference is tomorrow:\n\n' +
         'Student: ' + row[col.StudentName] + '\n' +
         'Teacher: ' + teacherName + (grade ? ' (' + grade + ')' : '') + '\n' +
         'Day: ' + dayDef.label + '\n' +
-        'Time: ' + toHHMM_(minutesFromTimeValue_(row[col.StartTime])) + ' - ' + toHHMM_(minutesFromTimeValue_(row[col.EndTime])) + '\n\n' +
-        'See you then!\n\n' +
+        'Time: ' + formatTime12_(slotKey_(row[col.StartTime])) + ' to ' + formatTime12_(slotKey_(row[col.EndTime])) + '\n\n' +
+        'See you then.\n\n' +
         'Hood View Adventist School';
-      MailApp.sendEmail(String(email).trim(), subject, msg);
-      sheet.getRange(r + 1, col.ReminderSent + 1).setValue(new Date());
+      sendMail_(row[col.Email], subject, msg);
+      sentIds.push(row[col.BookingID]);
     } catch (err) {
-      // Keep going, one failed reminder shouldn't stop the rest.
+      console.error(err); // keep going, one failed reminder shouldn't stop the rest
     }
+    if (sentIds.length >= 25) { markReminded_(sentIds); sentIds = []; }
   }
+  if (sentIds.length) markReminded_(sentIds);
+}
+
+function markReminded_(bookingIds) {
+  const want = {};
+  bookingIds.forEach(function (id) { want[id] = true; });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(5 * 60 * 1000);
+  try {
+    const sheet = getSheet_(SHEET_NAME_BOOKINGS);
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0];
+    const idCol = headers.indexOf('BookingID');
+    const sentCol = headers.indexOf('ReminderSent');
+    const now = new Date();
+    for (let r = 1; r < values.length; r++) {
+      if (want[values[r][idCol]]) sheet.getRange(r + 1, sentCol + 1).setValue(now);
+    }
+    SpreadsheetApp.flush();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ---- Teacher ----
+
+function bookingOut_(b) {
+  const dayDef = CONF_DAYS.find(function (d) { return d.key === b.Day; });
+  return {
+    day: b.Day,
+    dayLabel: dayDef ? dayDef.label : b.Day,
+    start: slotKey_(b.StartTime),
+    end: slotKey_(b.EndTime),
+    parentName: b.ParentName,
+    studentName: b.StudentName,
+    email: b.Email,
+    phone: b.Phone,
+  };
 }
 
 function getTeacherView_(token) {
   const cls = findClassByToken_(token);
   if (!cls) return { ok: false, error: 'Invalid teacher link.' };
 
-  const bookings = getBookingsForClass_(cls.ClassID).sort(function (a, b) {
-    if (a.Day !== b.Day) return a.Day < b.Day ? -1 : 1;
-    return a.StartTime < b.StartTime ? -1 : 1;
-  });
+  const bookings = sortBookings_(getBookingsForClass_(cls.ClassID));
 
   return {
     ok: true,
@@ -576,23 +852,11 @@ function getTeacherView_(token) {
     grade: cls.Grade,
     teacher: cls.Teacher,
     parentCode: cls.ParentCode,
-    startTime: toHHMM_(minutesFromTimeValue_(cls.StartTime)),
-    endTime: toHHMM_(minutesFromTimeValue_(cls.EndTime)),
-    incrementMin: cls.IncrementMin,
+    startTime: slotKey_(cls.StartTime),
+    endTime: slotKey_(cls.EndTime),
+    incrementMin: Number(cls.IncrementMin) || DEFAULT_INCREMENT,
     days: CONF_DAYS,
-    bookings: bookings.map(function (b) {
-      const dayDef = CONF_DAYS.find(function (d) { return d.key === b.Day; });
-      return {
-        day: b.Day,
-        dayLabel: dayDef ? dayDef.label : b.Day,
-        start: b.StartTime,
-        end: b.EndTime,
-        parentName: b.ParentName,
-        studentName: b.StudentName,
-        email: b.Email,
-        phone: b.Phone,
-      };
-    }),
+    bookings: bookings.map(bookingOut_),
   };
 }
 
@@ -600,34 +864,84 @@ function updateSchedule_(body) {
   const cls = findClassByToken_(body.token);
   if (!cls) return { ok: false, error: 'Invalid teacher link.' };
 
-  const start = body.startTime, end = body.endTime, inc = Number(body.incrementMin);
-  if (!start || !end || !inc) return { ok: false, error: 'Missing schedule fields.' };
-
-  const sheet = getSheet_(SHEET_NAME_CLASSES);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idCol = headers.indexOf('ClassID');
-  const startCol = headers.indexOf('StartTime');
-  const endCol = headers.indexOf('EndTime');
-  const incCol = headers.indexOf('IncrementMin');
-
-  for (let r = 1; r < values.length; r++) {
-    if (values[r][idCol] === cls.ClassID) {
-      sheet.getRange(r + 1, startCol + 1).setValue(start);
-      sheet.getRange(r + 1, endCol + 1).setValue(end);
-      sheet.getRange(r + 1, incCol + 1).setValue(inc);
-      break;
-    }
+  const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const start = String(body.startTime || ''), end = String(body.endTime || '');
+  const inc = Number(body.incrementMin);
+  if (!hhmm.test(start) || !hhmm.test(end)) return { ok: false, error: 'Please pick a start and end time.' };
+  if (minutesFromTimeValue_(start) >= minutesFromTimeValue_(end)) {
+    return { ok: false, error: 'End time needs to be after start time.' };
   }
+  if (ALLOWED_INCREMENTS.indexOf(inc) === -1) {
+    return { ok: false, error: 'Conference length must be 10, 15, 20 or 30 minutes.' };
+  }
+
+  const result = withLock_(function () {
+    // Every family already booked must land exactly on a slot in the new
+    // schedule. Otherwise they'd drop off the grid or overlap a new slot.
+    const newSlots = generateSlots_({ StartTime: start, EndTime: end, IncrementMin: inc });
+    const fits = {};
+    newSlots.forEach(function (s) { fits[s.start + '-' + s.end] = true; });
+    const conflicts = sortBookings_(getBookingsForClass_(cls.ClassID)).filter(function (b) {
+      return !fits[slotKey_(b.StartTime) + '-' + slotKey_(b.EndTime)];
+    });
+    if (conflicts.length) {
+      const list = conflicts.slice(0, 5).map(function (b) {
+        const d = CONF_DAYS.find(function (x) { return x.key === b.Day; });
+        return (d ? d.label : b.Day) + ' at ' + formatTime12_(slotKey_(b.StartTime));
+      }).join('; ');
+      return {
+        ok: false,
+        error: 'Nothing was saved. ' + conflicts.length + (conflicts.length === 1 ? ' family is' : ' families are') +
+          ' already booked at a time the new hours would remove or overlap (' + list +
+          (conflicts.length > 5 ? '; and more' : '') + '). Keep hours that include those times, ' +
+          'or contact the school office to move those families first.',
+      };
+    }
+
+    const sheet = getSheet_(SHEET_NAME_CLASSES);
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0];
+    const idCol = headers.indexOf('ClassID');
+    for (let r = 1; r < values.length; r++) {
+      if (values[r][idCol] === cls.ClassID) {
+        sheet.getRange(r + 1, headers.indexOf('StartTime') + 1).setValue("'" + start);
+        sheet.getRange(r + 1, headers.indexOf('EndTime') + 1).setValue("'" + end);
+        sheet.getRange(r + 1, headers.indexOf('IncrementMin') + 1).setValue(inc);
+        break;
+      }
+    }
+    SpreadsheetApp.flush();
+    return null;
+  });
+  if (result) return result;
 
   return getTeacherView_(body.token);
 }
 
-function getAdminView_(pin) {
-  const realPin = PropertiesService.getScriptProperties().getProperty('ADMIN_PIN');
-  if (!pin || String(pin) !== String(realPin)) {
-    return { ok: false, error: 'Incorrect PIN.' };
+// ---- Principal dashboard ----
+
+function checkAdminPin_(pin) {
+  const cache = CacheService.getScriptCache();
+  const fails = Number(cache.get('pin_fails') || 0);
+  if (fails >= PIN_MAX_FAILS) {
+    return 'Too many wrong PINs. The dashboard is locked for 15 minutes. Nothing else is affected.';
   }
+  const realPin = PropertiesService.getScriptProperties().getProperty('ADMIN_PIN') || '';
+  if (realPin.length < MIN_ADMIN_PIN_LEN) {
+    return 'The dashboard is locked until a longer admin PIN is set. In Apps Script, open ' +
+      'Project Settings > Script properties and set ADMIN_PIN to at least ' + MIN_ADMIN_PIN_LEN + ' characters.';
+  }
+  if (!pin || String(pin) !== realPin) {
+    cache.put('pin_fails', String(fails + 1), PIN_LOCKOUT_SEC);
+    return 'Incorrect PIN.';
+  }
+  cache.remove('pin_fails');
+  return null;
+}
+
+function getAdminView_(pin) {
+  const pinError = checkAdminPin_(pin);
+  if (pinError) return { ok: false, error: pinError };
 
   const classes = readTable_(getSheet_(SHEET_NAME_CLASSES));
   const allBookings = readTable_(getSheet_(SHEET_NAME_BOOKINGS));
@@ -642,40 +956,27 @@ function getAdminView_(pin) {
       teacher: cls.Teacher,
       parentCode: cls.ParentCode,
       teacherToken: cls.TeacherToken,
-      startTime: toHHMM_(minutesFromTimeValue_(cls.StartTime)),
-      endTime: toHHMM_(minutesFromTimeValue_(cls.EndTime)),
-      incrementMin: cls.IncrementMin,
+      startTime: slotKey_(cls.StartTime),
+      endTime: slotKey_(cls.EndTime),
+      incrementMin: Number(cls.IncrementMin) || DEFAULT_INCREMENT,
       totalSlots: totalSlots,
       booked: bookings.length,
-      remaining: totalSlots - bookings.length,
-      bookings: bookings
-        .sort(function (a, b) {
-          if (a.Day !== b.Day) return a.Day < b.Day ? -1 : 1;
-          return a.StartTime < b.StartTime ? -1 : 1;
-        })
-        .map(function (b) {
-          const dayDef = CONF_DAYS.find(function (d) { return d.key === b.Day; });
-          return {
-            day: b.Day,
-            dayLabel: dayDef ? dayDef.label : b.Day,
-            start: b.StartTime,
-            end: b.EndTime,
-            parentName: b.ParentName,
-            studentName: b.StudentName,
-            email: b.Email,
-            phone: b.Phone,
-          };
-        }),
+      remaining: Math.max(0, totalSlots - bookings.length),
+      bookings: sortBookings_(bookings).map(bookingOut_),
     };
   });
 
   const totalSlots = classSummaries.reduce(function (s, c) { return s + c.totalSlots; }, 0);
   const totalBooked = classSummaries.reduce(function (s, c) { return s + c.booked; }, 0);
 
+  let emailQuota = null;
+  try { emailQuota = MailApp.getRemainingDailyQuota(); } catch (err) { /* not critical */ }
+
   return {
     ok: true,
     generatedAt: new Date().toISOString(),
     totals: { totalSlots: totalSlots, totalBooked: totalBooked },
+    emailQuota: emailQuota,
     classes: classSummaries,
   };
 }

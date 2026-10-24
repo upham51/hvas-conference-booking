@@ -253,6 +253,9 @@ body[data-screen]:not([data-screen="screen-code"]) .hero-band-photo::after {
   padding: 22px 0;
 }
 .topbar-dark .brand .school-name { color: #fff; }
+/* The logo is dark navy on a transparent background, which vanishes on this
+   navy bar. Render it as a white silhouette here instead. */
+.topbar-dark .brand img { filter: brightness(0) invert(1); }
 .topbar-dark .brand .school-sub { color: rgba(255,255,255,0.55); }
 
 /* ---------- hero copy ---------- */
