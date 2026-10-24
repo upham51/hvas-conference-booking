@@ -25,7 +25,7 @@ jobs:
   # because it only broke on windows shorter than the one it was built on.
   layout:
     name: Layout check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,7 +39,7 @@ jobs:
     name: Deploy to Cloudflare
     needs: layout
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: cloudflare/wrangler-action@v3
