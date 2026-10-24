@@ -870,5 +870,11 @@ footer a { color: var(--navy-700); font-weight: 600; text-decoration: underline;
 .class-detail th { text-align: left; color: var(--ink-soft); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: .05em; padding: 6px 8px; }
 .class-detail td { padding: 8px; border-top: 1px solid var(--line); }
 .copy-link { font-size: 12px; color: var(--navy-700); font-weight: 700; cursor: pointer; text-decoration: underline; }
+.hours-edit { margin: 0 0 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); cursor: default; }
+.hours-edit .field select { font-size: 14.5px; padding: 10px 12px; }
+.hours-edit .alert { margin-top: 12px; }
+.hours-edit-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; flex-wrap: wrap; }
+.hours-edit-note { margin: 0; font-size: 13px; color: var(--ink-soft); flex: 1 1 260px; }
+.hours-edit .btn-primary.hours-save { width: auto; margin-top: 0; padding: 11px 24px; font-size: 14.5px; }
 
 .pin-gate { max-width: 380px; margin: 90px auto; text-align: center; }

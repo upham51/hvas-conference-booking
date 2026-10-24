@@ -68,6 +68,36 @@
 <script>
   const el = (id) => document.getElementById(id);
   let PIN = sessionStorage.getItem('hva_admin_pin') || '';
+  let CLASSES = [];
+  // Rows stay open across a refresh or a save, so the principal does not lose their place.
+  const openRows = new Set();
+
+  function hhmmLabel(val) {
+    const [h, mm] = val.split(':').map(Number);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${mm.toString().padStart(2, '0')} ${period}`;
+  }
+
+  // Same 6 AM to 8 PM, 15-minute grid as the teacher page. A saved time that
+  // is off the grid is kept as an option so opening a row never changes it.
+  function timeOptionsHtml(selected) {
+    const vals = [];
+    for (let m = 6 * 60; m <= 20 * 60; m += 15) {
+      vals.push(`${Math.floor(m / 60).toString().padStart(2, '0')}:${(m % 60).toString().padStart(2, '0')}`);
+    }
+    if (/^\d{2}:\d{2}$/.test(selected) && !vals.includes(selected)) { vals.push(selected); vals.sort(); }
+    return vals.map((v) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${hhmmLabel(v)}</option>`).join('');
+  }
+
+  // Principal choices are 15 or 30 minutes. A class already set to another
+  // length keeps it as an option so saving start/end alone does not change it.
+  function incrementOptionsHtml(current) {
+    const vals = [15, 30];
+    const cur = Number(current);
+    if (cur && !vals.includes(cur)) vals.unshift(cur);
+    return vals.map((v) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${v} minutes${vals.length > 2 && v === cur ? ' (current)' : ''}</option>`).join('');
+  }
 
   function formatTime(hhmm) {
     const [h, m] = String(hhmm).split(':').map(Number);
@@ -116,6 +146,58 @@
     if (res.ok) renderDashboard(res);
   });
 
+  // Saves through the same updateSchedule call the teacher page uses, with
+  // that class's teacher token. The backend refuses, and saves nothing, if
+  // the new hours would drop or overlap a time a family already booked.
+  async function saveHours(idx) {
+    const c = CLASSES[idx];
+    const errBox = el('hoursError-' + idx), okBox = el('hoursSuccess-' + idx);
+    const btn = el('hoursSave-' + idx);
+    errBox.classList.remove('show');
+    okBox.classList.remove('show');
+    const startTime = el('hoursStart-' + idx).value;
+    const endTime = el('hoursEnd-' + idx).value;
+    const incrementMin = Number(el('hoursInc-' + idx).value);
+
+    if (startTime >= endTime) {
+      errBox.textContent = 'End time needs to be after start time. Nothing was saved.';
+      errBox.classList.add('show');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    let res;
+    try {
+      res = await HVA_API.post({ action: 'updateSchedule', token: c.teacherToken, startTime, endTime, incrementMin });
+    } catch (e) {
+      errBox.textContent = 'Could not reach the server, so nothing was saved. Please try again.';
+      errBox.classList.add('show');
+      btn.disabled = false;
+      btn.textContent = 'Save hours';
+      return;
+    }
+    if (!res.ok) {
+      errBox.textContent = res.error || 'Something went wrong. Nothing was saved.';
+      errBox.classList.add('show');
+      btn.disabled = false;
+      btn.textContent = 'Save hours';
+      return;
+    }
+
+    // Saved. Reload so the slot counts and totals match the new hours.
+    const msg = `Saved. Families now see ${hhmmLabel(startTime)} to ${hhmmLabel(endTime)}, ${incrementMin}-minute conferences, on both days.`;
+    try {
+      const fresh = await tryLoad(PIN);
+      if (fresh.ok) renderDashboard(fresh);
+    } catch (e) { /* the save went through; the counts update on the next refresh */ }
+    const newIdx = CLASSES.findIndex((x) => x.classId === c.classId);
+    const box = el('hoursSuccess-' + (newIdx === -1 ? idx : newIdx));
+    if (box) { box.textContent = msg; box.classList.add('show'); }
+    const b = el('hoursSave-' + (newIdx === -1 ? idx : newIdx));
+    if (b) { b.disabled = false; b.textContent = 'Save hours'; }
+  }
+
   function renderDashboard(data) {
     const totalOpen = data.totals.totalSlots - data.totals.totalBooked;
     const pct = data.totals.totalSlots ? Math.round((data.totals.totalBooked / data.totals.totalSlots) * 100) : 0;
@@ -130,6 +212,7 @@
       el('quotaLine').style.display = '';
     }
 
+    CLASSES = data.classes;
     el('classTable').innerHTML = data.classes.map((c, i) => {
       const cPct = c.totalSlots ? Math.round((c.booked / c.totalSlots) * 100) : 0;
       // The host serves clean URLs (/teacher, not /teacher.html).
@@ -146,7 +229,29 @@
               <div class="fill-pct">${c.booked}/${c.totalSlots}</div>
             </div>
           </div>
-          <div class="class-detail" id="detail-${i}">
+          <div class="class-detail${openRows.has(c.classId) ? ' open' : ''}" id="detail-${i}">
+            <div class="hours-edit">
+              <div class="settings-row">
+                <div class="field">
+                  <label for="hoursStart-${i}">Start Time</label>
+                  <select id="hoursStart-${i}">${timeOptionsHtml(c.startTime)}</select>
+                </div>
+                <div class="field">
+                  <label for="hoursEnd-${i}">End Time</label>
+                  <select id="hoursEnd-${i}">${timeOptionsHtml(c.endTime)}</select>
+                </div>
+                <div class="field">
+                  <label for="hoursInc-${i}">Length of Each Conference</label>
+                  <select id="hoursInc-${i}">${incrementOptionsHtml(c.incrementMin)}</select>
+                </div>
+              </div>
+              <div class="alert alert-error" id="hoursError-${i}"></div>
+              <div class="alert alert-success" id="hoursSuccess-${i}"></div>
+              <div class="hours-edit-foot">
+                <p class="hours-edit-note">Applies to both days. Hours that would drop or overlap a booked family are refused and nothing is saved.</p>
+                <button class="btn btn-primary hours-save" id="hoursSave-${i}" data-idx="${i}">Save hours</button>
+              </div>
+            </div>
             <p style="font-size:13px; color:var(--ink-soft); margin:0 0 10px;">
               Hours: ${formatTime(c.startTime)}–${formatTime(c.endTime)}, ${esc(c.incrementMin)}-min slots &nbsp;·&nbsp;
               Teacher link: <span class="copy-link" data-link="${esc(teacherLink)}">copy</span>
@@ -179,8 +284,14 @@
           setTimeout(() => { e.target.textContent = orig; }, 1200);
           return;
         }
+        if (e.target.closest('.hours-edit')) {
+          if (e.target.closest('.hours-save')) saveHours(Number(row.dataset.idx));
+          return;
+        }
         const idx = row.dataset.idx;
-        el('detail-' + idx).classList.toggle('open');
+        const open = el('detail-' + idx).classList.toggle('open');
+        const id = CLASSES[idx] && CLASSES[idx].classId;
+        if (open) openRows.add(id); else openRows.delete(id);
       });
     });
   }
