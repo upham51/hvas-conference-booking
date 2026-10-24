@@ -50,7 +50,7 @@
       <div class="card-pad code-form">
         <label for="codeInput">Classroom code</label>
         <input id="codeInput" class="code-input" maxlength="12" placeholder="e.g. WHITE" autocomplete="off" autocapitalize="characters" />
-        <div class="hint">This code comes from your child's teacher, usually their name or a color, like <strong>WHITE</strong>. Don't have it? Contact the school office.</div>
+        <div class="hint">This code comes from your child's teacher, usually your teacher&#39;s last name, like <strong>WHITE</strong>. Don't have it? Contact the school office.</div>
         <div class="alert alert-error" id="codeError"></div>
         <button class="btn btn-primary" id="codeSubmit">
           <span id="codeSubmitText">Find My Class</span>
@@ -73,7 +73,7 @@
       <div class="step">
         <span class="step-num">3</span>
         <span class="step-title">Enter your info</span>
-        <span class="step-sub">You&#39;re done &#8212; we&#39;ll email you</span>
+        <span class="step-sub">You&#39;re done, we&#39;ll email you</span>
       </div>
     </div>
   </section>
@@ -83,7 +83,7 @@
     <div class="teacher-head fade-in">
       <div class="grade-pill" id="bookGrade">—</div>
       <h1 id="bookTeacher">—</h1>
-      <p class="lead" style="margin-top:10px;">Pick an open time below. Each conference is 15 minutes.</p>
+      <p class="lead" style="margin-top:10px;" id="bookLead">Pick an open time below.</p>
     </div>
 
     <div class="day-tabs" id="dayTabs"></div>
@@ -92,6 +92,7 @@
 
     <div class="card fade-in">
       <div class="card-pad">
+        <div class="alert alert-error" id="slotNotice" role="alert"></div>
         <div id="slotArea"></div>
 
         <div id="selectionArea" style="display:none;">
@@ -122,10 +123,11 @@
             </div>
           </div>
 
-          <div class="alert alert-error" id="bookError"></div>
+          <div class="alert alert-error" id="bookError" role="alert"></div>
           <button class="btn btn-primary" id="bookSubmit">
             <span id="bookSubmitText">Reserve This Time</span>
           </button>
+          <p class="hint" id="bookSlow" style="display:none; margin-top:12px; text-align:center;">This can take up to a minute. Please keep this page open.</p>
         </div>
       </div>
     </div>
@@ -322,10 +324,11 @@
     const s = state.schedule;
     el('bookGrade').textContent = s.grade;
     el('bookTeacher').textContent = s.teacher;
+    el('bookLead').textContent = 'Pick an open time below. Each conference is ' + (s.incrementMin || 15) + ' minutes.';
 
     el('dayTabs').innerHTML = s.days.map((d) => {
       const open = d.slots.filter((x) => !x.taken).length;
-      return `<button class="day-tab ${d.key === state.activeDay ? 'active' : ''}" data-day="${d.key}">
+      return `<button class="day-tab ${d.key === state.activeDay ? 'active' : ''}" data-day="${esc(d.key)}">
         ${formatShortDate(d.date)}<span class="count">${open} open</span>
       </button>`;
     }).join('');
@@ -334,6 +337,7 @@
       btn.addEventListener('click', () => {
         state.activeDay = btn.dataset.day;
         state.selected = null;
+        hideNotice();
         renderBookScreen();
       });
     });
@@ -351,12 +355,15 @@
     } else {
       el('slotArea').innerHTML = `<div class="slot-grid">` + openSlots.map((sl) => {
         const isSel = state.selected && state.selected.start === sl.start && state.activeDay === state.selected.day;
-        return `<div class="slot ${sl.taken ? 'taken' : ''} ${isSel ? 'selected' : ''}" data-start="${sl.start}" data-end="${sl.end}">${formatTime(sl.start)}</div>`;
+        return `<div class="slot ${sl.taken ? 'taken' : ''} ${isSel ? 'selected' : ''}" data-start="${esc(sl.start)}" data-end="${esc(sl.end)}">${formatTime(sl.start)}</div>`;
       }).join('') + `</div>`;
 
       document.querySelectorAll('.slot:not(.taken)').forEach((elm) => {
         elm.addEventListener('click', () => {
           state.selected = { day: state.activeDay, start: elm.dataset.start, end: elm.dataset.end };
+          state.requestId = hvaRequestId();
+          hideNotice();
+          el('bookError').classList.remove('show');
           renderBookScreen();
           el('selectionArea').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         });
@@ -385,9 +392,36 @@
   }
 
   // ---- Booking submit ----
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  function showNotice(msg, kind) {
+    el('slotNotice').textContent = msg;
+    el('slotNotice').className = 'alert ' + (kind === 'success' ? 'alert-success' : 'alert-error') + ' show';
+  }
+  function hideNotice() { el('slotNotice').classList.remove('show'); }
+  function showBookError(msg) {
+    el('bookError').textContent = msg;
+    el('bookError').classList.add('show');
+  }
+  // After 8 seconds of waiting, tell the parent it's still working so they
+  // don't refresh or tap again.
+  function startSlowHint(hintEl) {
+    const t = setTimeout(() => { hintEl.style.display = ''; }, 8000);
+    return () => { clearTimeout(t); hintEl.style.display = 'none'; };
+  }
+  async function refreshSchedule() {
+    try {
+      const refreshed = await HVA_API.get({ action: 'schedule', code: state.code });
+      if (refreshed.ok) { state.schedule = refreshed; }
+    } catch (e) { /* keep the grid we have */ }
+    state.selected = null;
+    renderBookScreen();
+  }
+
   el('bookSubmit').addEventListener('click', async () => {
+    if (!state.selected) return;
     const payload = {
       action: 'book',
+      requestId: state.requestId || (state.requestId = hvaRequestId()),
       code: state.code,
       day: state.selected.day,
       start: state.selected.start,
@@ -397,19 +431,30 @@
       phone: el('parentPhone').value.trim(),
     };
     el('bookError').classList.remove('show');
+    hideNotice();
     if (!payload.parentName || !payload.studentName || !payload.email) {
-      el('bookError').textContent = 'Please fill in your name, your student\'s name, and your email.';
-      el('bookError').classList.add('show');
+      showBookError('Please fill in your name, your student\'s name, and your email.');
+      return;
+    }
+    if (!EMAIL_RE.test(payload.email)) {
+      showBookError('That email address doesn\'t look complete. Please check it, we send your confirmation and cancel link there.');
       return;
     }
     setBtnLoading(el('bookSubmit'), el('bookSubmitText'), true);
+    const stopSlow = startSlowHint(el('bookSlow'));
     try {
       const res = await HVA_API.post(payload);
       if (!res.ok) {
-        el('bookError').textContent = res.error || 'That time may have just been taken. Please pick another.';
-        el('bookError').classList.add('show');
-        const refreshed = await HVA_API.get({ action: 'schedule', code: state.code });
-        if (refreshed.ok) { state.schedule = refreshed; state.selected = null; renderBookScreen(); }
+        if (res.code === 'slot_taken' || res.code === 'slot_gone' || res.code === 'slot_closed') {
+          // The time itself is the problem: show why above a fresh grid.
+          showNotice(res.error);
+          await refreshSchedule();
+          el('slotNotice').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          // Anything else (a typo, the site being busy): keep the form open.
+          showBookError(res.error || 'Something went wrong. Nothing was booked. Please try again.');
+        }
+        state.requestId = hvaRequestId();
         return;
       }
       const bookedDay = state.schedule.days.find((d) => d.key === state.selected.day);
@@ -418,21 +463,23 @@
         studentName: payload.studentName,
         dateISO: bookedDay ? bookedDay.date : null,
       };
+      state.requestId = null;
       renderConfirm(res.confirmation);
       showScreen('screen-confirm');
     } catch (err) {
-      el('bookError').textContent = 'Could not reach the server. Please try again.';
-      el('bookError').classList.add('show');
+      // Same requestId is kept, so tapping again can't book twice.
+      showBookError('We couldn\'t get an answer from the server. Your time may or may not be booked. Tap Reserve again: if it already went through, you\'ll see your confirmation rather than a second booking.');
     } finally {
+      stopSlow();
       setBtnLoading(el('bookSubmit'), el('bookSubmitText'), false, 'Reserve This Time');
     }
   });
 
   function renderConfirm(c) {
     el('confirmDetail').innerHTML = `
-      <div class="row"><div class="k">Teacher</div><div class="v">${c.teacher}</div></div>
-      <div class="row"><div class="k">Grade</div><div class="v">${c.grade}</div></div>
-      <div class="row"><div class="k">Day</div><div class="v">${c.day}</div></div>
+      <div class="row"><div class="k">Teacher</div><div class="v">${esc(c.teacher)}</div></div>
+      <div class="row"><div class="k">Grade</div><div class="v">${esc(c.grade)}</div></div>
+      <div class="row"><div class="k">Day</div><div class="v">${esc(c.day)}</div></div>
       <div class="row"><div class="k">Time</div><div class="v">${formatTime(c.start)} – ${formatTime(c.end)}</div></div>
     `;
   }
@@ -463,11 +510,11 @@
   });
 
   // ---- Screen 4: manage / cancel a booking from the confirmation email link ----
-  function manageErrorView(message) {
+  function manageErrorView(message, title) {
     el('manageContent').innerHTML = `
       <div style="text-align:center;">
-        <h2 style="font-size:20px;">We couldn't find that booking</h2>
-        <p class="lead" style="margin-top:8px;">${message}</p>
+        <h2 style="font-size:20px;">${esc(title || 'We couldn\'t find that booking')}</h2>
+        <p class="lead" style="margin-top:8px;">${esc(message)}</p>
         <button class="btn btn-primary" id="manageBackBtn" style="margin-top:20px;">Go to Booking Page</button>
       </div>
     `;
@@ -480,10 +527,10 @@
     el('manageContent').innerHTML = `
       <h2 style="font-size:20px; text-align:center;">Manage Your Conference</h2>
       <div class="confirm-detail" style="margin-top:20px;">
-        <div class="row"><div class="k">Student</div><div class="v">${m.studentName}</div></div>
-        <div class="row"><div class="k">Teacher</div><div class="v">${m.teacher}</div></div>
-        <div class="row"><div class="k">Grade</div><div class="v">${m.grade}</div></div>
-        <div class="row"><div class="k">Day</div><div class="v">${m.dayLabel}</div></div>
+        <div class="row"><div class="k">Student</div><div class="v">${esc(m.studentName)}</div></div>
+        <div class="row"><div class="k">Teacher</div><div class="v">${esc(m.teacher)}</div></div>
+        <div class="row"><div class="k">Grade</div><div class="v">${esc(m.grade)}</div></div>
+        <div class="row"><div class="k">Day</div><div class="v">${esc(m.dayLabel)}</div></div>
         <div class="row"><div class="k">Time</div><div class="v">${formatTime(m.start)} – ${formatTime(m.end)}</div></div>
       </div>
       <div class="alert alert-error" id="manageError"></div>
@@ -494,6 +541,7 @@
         <button class="btn btn-primary" id="manageCancelConfirmBtn" style="width:100%;">Yes, Cancel My Conference</button>
         <button class="btn btn-ghost" id="manageCancelBackBtn" style="width:100%; margin-top:10px;">Never Mind, Keep My Time</button>
       </p>
+      <p class="hint" id="manageSlow" style="display:none; margin-top:12px; text-align:center;">This can take up to a minute. Please keep this page open.</p>
     `;
 
     el('manageCancelBtn').addEventListener('click', () => {
@@ -504,35 +552,51 @@
       el('manageCancelBtn').style.display = '';
       el('manageConfirmHint').style.display = 'none';
     });
+    // One requestId for this page, so tapping "Yes, cancel" again after a
+    // network hiccup gets the first answer back instead of an error.
+    const cancelRequestId = hvaRequestId();
     el('manageCancelConfirmBtn').addEventListener('click', async () => {
       el('manageError').classList.remove('show');
       setBtnLoading(el('manageCancelConfirmBtn'), el('manageCancelConfirmBtn'), true);
+      const stopSlow = startSlowHint(el('manageSlow'));
+      let res;
       try {
-        const res = await HVA_API.post({ action: 'manageCancel', token });
-        if (!res.ok) {
-          el('manageError').textContent = res.error || 'Could not cancel that booking. Please contact the school office.';
+        res = await HVA_API.post({ action: 'manageCancel', token, requestId: cancelRequestId });
+      } catch (err) {
+        stopSlow();
+        el('manageError').textContent = 'We couldn\'t get an answer from the server, so your time may or may not be cancelled. Tap the button again to check.';
+        el('manageError').classList.add('show');
+        setBtnLoading(el('manageCancelConfirmBtn'), el('manageCancelConfirmBtn'), false, 'Yes, Cancel My Conference');
+        return;
+      }
+      stopSlow();
+      if (!res.ok) {
+        if (res.code === 'busy') {
+          el('manageError').textContent = res.error;
           el('manageError').classList.add('show');
           setBtnLoading(el('manageCancelConfirmBtn'), el('manageCancelConfirmBtn'), false, 'Yes, Cancel My Conference');
           return;
         }
-        // Cancelled. Drop them straight into the normal booking flow for the
-        // same classroom so they can pick a new time immediately.
-        el('manageContent').innerHTML = `<p class="lead" style="text-align:center;">Your time has been cancelled. Loading open times&hellip;</p>`;
+        // The booking is already gone (or never existed). There is nothing
+        // left to cancel, so don't leave cancel buttons on screen.
+        manageErrorView(res.error || 'Could not cancel that booking. Please contact the school office.');
+        return;
+      }
+      // Cancelled. Drop them straight into the normal booking flow for the
+      // same classroom so they can pick a new time immediately.
+      el('manageContent').innerHTML = `<p class="lead" style="text-align:center;">Your time has been cancelled. Loading open times&hellip;</p>`;
+      try {
         const schedule = await HVA_API.get({ action: 'schedule', code: res.parentCode });
-        if (schedule.ok) {
-          state.code = res.parentCode;
-          state.schedule = schedule;
-          state.activeDay = schedule.days[0].key;
-          state.selected = null;
-          renderBookScreen();
-          showScreen('screen-book');
-        } else {
-          manageErrorView('Your conference was cancelled. Contact the school office if you\'d like to pick a new time.');
-        }
+        if (!schedule.ok) throw new Error('schedule');
+        state.code = res.parentCode;
+        state.schedule = schedule;
+        state.activeDay = schedule.days[0].key;
+        state.selected = null;
+        renderBookScreen();
+        showScreen('screen-book');
+        showNotice('Your old time was cancelled and we emailed you a confirmation. Pick a new time below if you\'d like one.', 'success');
       } catch (err) {
-        el('manageError').textContent = 'Could not reach the server. Please try again.';
-        el('manageError').classList.add('show');
-        setBtnLoading(el('manageCancelConfirmBtn'), el('manageCancelConfirmBtn'), false, 'Yes, Cancel My Conference');
+        manageErrorView('Contact the school office if you\'d like to pick a new time.', 'Your conference was cancelled');
       }
     });
   }

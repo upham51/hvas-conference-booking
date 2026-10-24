@@ -73,7 +73,7 @@
           <span id="saveBtnText">Save My Schedule</span>
         </button>
 
-        <p class="hint" style="margin-top:14px;">Your classroom code for parents is <strong id="tCode" style="color:var(--navy-800);"></strong>. Already-booked times are always kept. Changing your hours only affects open slots.</p>
+        <p class="hint" style="margin-top:14px;">Your classroom code for parents is <strong id="tCode" style="color:var(--navy-800);"></strong>. Once families have booked, you can only change your hours in ways that keep every booked time. To move a booked family, contact the office.</p>
       </div>
     </div>
 
@@ -112,7 +112,8 @@
   }
 
   function formatTime(hhmm) {
-    const [h, m] = hhmm.split(':').map(Number);
+    const [h, m] = String(hhmm).split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return '';
     const period = h >= 12 ? 'PM' : 'AM';
     const h12 = h % 12 === 0 ? 12 : h % 12;
     return `${h12}:${m.toString().padStart(2, '0')} ${period}`;
@@ -152,8 +153,8 @@
       el('bookingList').innerHTML = data.bookings.map((b) => `
         <div class="booking-item">
           <div>
-            <div class="who">${b.studentName} · ${b.parentName}</div>
-            <div class="when">${b.dayLabel} · ${formatTime(b.start)}–${formatTime(b.end)}</div>
+            <div class="who">${esc(b.studentName)} · ${esc(b.parentName)}</div>
+            <div class="when">${esc(b.dayLabel)} · ${formatTime(b.start)}–${formatTime(b.end)}</div>
           </div>
         </div>
       `).join('');
