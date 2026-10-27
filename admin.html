@@ -69,6 +69,7 @@
   const el = (id) => document.getElementById(id);
   let PIN = sessionStorage.getItem('hva_admin_pin') || '';
   let CLASSES = [];
+  let BLOCKED = [];
   // Rows stay open across a refresh or a save, so the principal does not lose their place.
   const openRows = new Set();
 
@@ -106,6 +107,16 @@
     const h12 = h % 12 === 0 ? 12 : h % 12;
     return `${h12}:${m.toString().padStart(2, '0')} ${period}`;
   }
+
+  // "5:00 to 5:30 PM" when both ends share AM/PM, otherwise both written out.
+  function formatRange(a, b) {
+    const fa = formatTime(a), fb = formatTime(b);
+    return fa.slice(-2) === fb.slice(-2) ? `${fa.slice(0, -3)} to ${fb}` : `${fa} to ${fb}`;
+  }
+  function blockedText() {
+    return BLOCKED.map((b) => `${b.label.toLowerCase()} ${formatRange(b.start, b.end)}`).join(', ');
+  }
+  function breakLabel(n) { return Number(n) === 0 ? 'no break' : `${n}-min break`; }
 
   async function tryLoad(pin) {
     const res = await HVA_API.get({ action: 'admin', pin });
@@ -158,6 +169,7 @@
     const startTime = el('hoursStart-' + idx).value;
     const endTime = el('hoursEnd-' + idx).value;
     const incrementMin = Number(el('hoursInc-' + idx).value);
+    const breakMin = Number(el('hoursBreak-' + idx).value);
 
     if (startTime >= endTime) {
       errBox.textContent = 'End time needs to be after start time. Nothing was saved.';
@@ -169,7 +181,7 @@
     btn.innerHTML = '<span class="spinner"></span>';
     let res;
     try {
-      res = await HVA_API.post({ action: 'updateSchedule', token: c.teacherToken, startTime, endTime, incrementMin });
+      res = await HVA_API.post({ action: 'updateSchedule', token: c.teacherToken, startTime, endTime, incrementMin, breakMin });
     } catch (e) {
       errBox.textContent = 'Could not reach the server, so nothing was saved. Please try again.';
       errBox.classList.add('show');
@@ -186,7 +198,7 @@
     }
 
     // Saved. Reload so the slot counts and totals match the new hours.
-    const msg = `Saved. Families now see ${hhmmLabel(startTime)} to ${hhmmLabel(endTime)}, ${incrementMin}-minute conferences, on both days.`;
+    const msg = `Saved. Families now see ${hhmmLabel(startTime)} to ${hhmmLabel(endTime)}, ${incrementMin}-minute conferences, ${breakLabel(breakMin)}, on both days.`;
     try {
       const fresh = await tryLoad(PIN);
       if (fresh.ok) renderDashboard(fresh);
@@ -213,6 +225,7 @@
     }
 
     CLASSES = data.classes;
+    BLOCKED = data.blocked || [];
     el('classTable').innerHTML = data.classes.map((c, i) => {
       const cPct = c.totalSlots ? Math.round((c.booked / c.totalSlots) * 100) : 0;
       // The host serves clean URLs (/teacher, not /teacher.html).
@@ -241,6 +254,14 @@
                   <select id="hoursEnd-${i}">${timeOptionsHtml(c.endTime)}</select>
                 </div>
                 <div class="field">
+                  <label for="hoursBreak-${i}">Break between conferences</label>
+                  <select id="hoursBreak-${i}">
+                    <option value="0" ${Number(c.breakMin) === 0 ? 'selected' : ''}>None</option>
+                    <option value="5" ${Number(c.breakMin) === 5 ? 'selected' : ''}>5 min</option>
+                    <option value="10" ${Number(c.breakMin) === 10 ? 'selected' : ''}>10 min</option>
+                  </select>
+                </div>
+                <div class="field">
                   <label for="hoursInc-${i}">Length of Each Conference</label>
                   <select id="hoursInc-${i}">${incrementOptionsHtml(c.incrementMin)}</select>
                 </div>
@@ -248,12 +269,12 @@
               <div class="alert alert-error" id="hoursError-${i}"></div>
               <div class="alert alert-success" id="hoursSuccess-${i}"></div>
               <div class="hours-edit-foot">
-                <p class="hours-edit-note">Applies to both days. Hours that would drop or overlap a booked family are refused and nothing is saved.</p>
+                <p class="hours-edit-note">Applies to both days. Every class also stops for the ${esc(blockedText())}. Hours that would drop or overlap a booked family are refused and nothing is saved.</p>
                 <button class="btn btn-primary hours-save" id="hoursSave-${i}" data-idx="${i}">Save hours</button>
               </div>
             </div>
             <p style="font-size:13px; color:var(--ink-soft); margin:0 0 10px;">
-              Hours: ${formatTime(c.startTime)}–${formatTime(c.endTime)}, ${esc(c.incrementMin)}-min slots &nbsp;·&nbsp;
+              Hours: ${formatTime(c.startTime)}–${formatTime(c.endTime)}, ${esc(c.incrementMin)}-min slots, ${breakLabel(c.breakMin)}${BLOCKED.length ? ', ' + esc(blockedText()) : ''} &nbsp;·&nbsp;
               Teacher link: <span class="copy-link" data-link="${esc(teacherLink)}">copy</span>
             </p>
             ${c.bookings.length ? `

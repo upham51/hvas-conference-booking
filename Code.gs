@@ -13,6 +13,18 @@ const DEFAULT_START = '14:00';
 const DEFAULT_END = '19:00';
 const DEFAULT_INCREMENT = 15;
 
+// Gap between back-to-back conferences, set per class in the Classes sheet's
+// BreakMin column. A missing column or blank cell counts as the default.
+const ALLOWED_BREAKS = [0, 5, 10];
+const DEFAULT_BREAK_MIN = 5;
+
+// Windows when no conference can start or run, for every class on both days.
+// Slots that would overlap a window are skipped, and the next slot starts
+// exactly when the window ends. Parents see the window as a marker in the grid.
+const BLOCKED_TIMES = [
+  { start: '17:00', end: '17:30', label: 'Dinner break' },
+];
+
 // The address used to build the "manage my booking" link in confirmation
 // emails. This is the school's own short link, which redirects to wherever the
 // booking site is hosted, so the links in already-sent emails keep working if
@@ -31,7 +43,7 @@ const SCHOOL_TIMEZONE = 'America/Los_Angeles';
 // gets an instant email the moment a parent books a conference in that
 // class. Use an empty array to skip notifications for a class, nothing
 // breaks either way.
-// Note: fhaffner@hvja.org (Mrs. Haffner, 1st Grade co-teacher) was given
+// Note: fhaffner@hvja.org (Fae Haffner, 1st Grade co-teacher) was given
 // to us as "likely" rather than confirmed, double check it with the office.
 const TEACHER_EMAILS = {
   walker: ['walker@hvja.org'],
@@ -49,18 +61,18 @@ const TEACHER_EMAILS = {
 };
 
 const CLASS_SEED = [
-  { classId: 'walker',   grade: 'Preschool',     teacher: 'Mrs. Walker' },
-  { classId: 'leslie',   grade: 'Pre-K',          teacher: 'Mrs. Leslie' },
-  { classId: 'segoria',  grade: 'Forest School',  teacher: 'Ms. Segoria' },
-  { classId: 'mcginnis', grade: 'Kindergarten',   teacher: 'Mrs. McGinnis' },
-  { classId: 'sexton',   grade: '1st Grade',      teacher: 'Mrs. Sexton / Mrs. Haffner' },
-  { classId: 'neely',    grade: '2nd Grade',      teacher: 'Mrs. Neely' },
-  { classId: 'white',    grade: '3rd Grade',      teacher: 'Mrs. White' },
-  { classId: 'pazitka',  grade: '4th Grade',      teacher: 'Mrs. Pazitka' },
-  { classId: 'hays',     grade: '5th Grade',      teacher: 'Mrs. Hays' },
-  { classId: 'waymire',  grade: '6th Grade',      teacher: 'Mr. Waymire' },
-  { classId: 'morita',   grade: '7th Grade',      teacher: 'Mrs. Morita' },
-  { classId: 'saliba',   grade: '8th Grade',      teacher: 'Mr. Saliba' },
+  { classId: 'walker',   grade: 'Preschool',     teacher: 'Selina Walker' },
+  { classId: 'leslie',   grade: 'Pre-K',          teacher: 'Melissa Leslie' },
+  { classId: 'segoria',  grade: 'Forest School',  teacher: 'Lizzie Segoria' },
+  { classId: 'mcginnis', grade: 'Kindergarten',   teacher: 'Tamma-Lynn McGinnis' },
+  { classId: 'sexton',   grade: '1st Grade',      teacher: 'Debbie Sexton & Fae Haffner' },
+  { classId: 'neely',    grade: '2nd Grade',      teacher: 'Jada Neely' },
+  { classId: 'white',    grade: '3rd Grade',      teacher: 'Haley White' },
+  { classId: 'pazitka',  grade: '4th Grade',      teacher: 'Kristin Pazitka' },
+  { classId: 'hays',     grade: '5th Grade',      teacher: 'Brian Hays' },
+  { classId: 'waymire',  grade: '6th Grade',      teacher: 'Shelly Waymire' },
+  { classId: 'morita',   grade: '7th Grade',      teacher: 'Timothy Morita' },
+  { classId: 'saliba',   grade: '8th Grade',      teacher: 'Victoria Saliba' },
 ];
 
 // Families cannot book a slot that starts less than this many minutes from
@@ -98,7 +110,7 @@ function setup() {
   classes.clear();
   classes.appendRow([
     'ClassID', 'Grade', 'Teacher', 'ParentCode', 'TeacherToken',
-    'StartTime', 'EndTime', 'IncrementMin', 'Active',
+    'StartTime', 'EndTime', 'IncrementMin', 'Active', 'BreakMin',
   ]);
   classes.setFrozenRows(1);
 
@@ -113,10 +125,11 @@ function setup() {
       "'" + DEFAULT_END,
       DEFAULT_INCREMENT,
       true,
+      DEFAULT_BREAK_MIN,
     ];
   });
   classes.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-  classes.autoResizeColumns(1, 9);
+  classes.autoResizeColumns(1, 10);
 
   let bookings = existing;
   if (!bookings) bookings = ss.insertSheet(SHEET_NAME_BOOKINGS);
@@ -135,6 +148,58 @@ function setup() {
     'an admin PIN of at least ' + MIN_ADMIN_PIN_LEN + ' characters: Project Settings > ' +
     'Script properties > ADMIN_PIN.'
   );
+}
+
+// Adds the BreakMin column to the Classes sheet if it is missing and returns
+// its 1-based column number. Callers hold the lock or run from the editor.
+function ensureBreakColumn_(sheet) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const at = headers.indexOf('BreakMin');
+  if (at !== -1) return at + 1;
+  sheet.getRange(1, headers.length + 1).setValue('BreakMin');
+  return headers.length + 1;
+}
+
+// One-time launch step, run from the Apps Script editor after redeploying.
+// Writes the full teacher names into the Classes sheet, adds the BreakMin
+// column if it is missing, and sets every class to a 5 minute break. It
+// refuses once anyone has booked, because a new break length can move or
+// remove times families already hold. Safe to run twice before launch.
+function applyLaunchSettings() {
+  const bookings = getSheet_(SHEET_NAME_BOOKINGS);
+  if (bookings && bookings.getLastRow() > 1) {
+    throw new Error('applyLaunchSettings() was stopped: the Bookings tab already has ' +
+      (bookings.getLastRow() - 1) + ' booking(s), and a new break length could move them. Nothing was changed.');
+  }
+
+  const sheet = getSheet_(SHEET_NAME_CLASSES);
+  const breakCol = ensureBreakColumn_(sheet);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idCol = headers.indexOf('ClassID'), teacherCol = headers.indexOf('Teacher');
+  if (idCol === -1 || teacherCol === -1) {
+    throw new Error('The Classes tab is missing its ClassID or Teacher column. Nothing was changed.');
+  }
+
+  const names = {};
+  CLASS_SEED.forEach(function (c) { names[c.classId] = c.teacher; });
+  let renamed = 0;
+  const unmatched = [];
+  for (let r = 1; r < values.length; r++) {
+    const id = values[r][idCol];
+    if (!id) continue;
+    if (Object.prototype.hasOwnProperty.call(names, id)) {
+      sheet.getRange(r + 1, teacherCol + 1).setValue(names[id]);
+      renamed++;
+    } else {
+      unmatched.push(id);
+    }
+    sheet.getRange(r + 1, breakCol).setValue(DEFAULT_BREAK_MIN);
+  }
+  SpreadsheetApp.flush();
+  notify_('Launch settings applied. Teacher names updated for ' + renamed + ' class(es); every class now has a ' +
+    DEFAULT_BREAK_MIN + ' minute break.' +
+    (unmatched.length ? ' Not in the name list, names left alone: ' + unmatched.join(', ') + '.' : ''));
 }
 
 // One-time upgrade for a Bookings sheet that was created before the
@@ -393,13 +458,38 @@ function formatTime12_(hhmm) {
   return h12 + ':' + (mm < 10 ? '0' : '') + mm + ' ' + (h >= 12 ? 'PM' : 'AM');
 }
 
-function generateSlots_(cls) {
+// Minutes between conferences for a class. Missing column, blank cell or a
+// value outside 0/5/10 all fall back to the default.
+function breakMinFor_(cls) {
+  const v = cls ? cls.BreakMin : undefined;
+  if (v === undefined || v === null || v === '') return DEFAULT_BREAK_MIN;
+  const n = Number(v);
+  return ALLOWED_BREAKS.indexOf(n) === -1 ? DEFAULT_BREAK_MIN : n;
+}
+
+// Slots step by conference length plus the class's break. A slot that would
+// overlap a blocked window is skipped and the next one starts exactly when
+// the window ends, so the grid restarts after the gap instead of running
+// through it. Every caller (booking, parent grid, schedule check, admin
+// totals) goes through here, so they always agree.
+function generateSlots_(cls, blockedTimes) {
   const inc = Number(cls.IncrementMin) || DEFAULT_INCREMENT;
+  const brk = breakMinFor_(cls);
   const startMin = minutesFromTimeValue_(cls.StartTime);
   const endMin = minutesFromTimeValue_(cls.EndTime);
+  const blocks = (blockedTimes || BLOCKED_TIMES).map(function (b) {
+    return { s: minutesFromTimeValue_(b.start), e: minutesFromTimeValue_(b.end) };
+  });
   const slots = [];
-  for (let t = startMin; t + inc <= endMin; t += inc) {
+  let t = startMin;
+  while (t + inc <= endMin) {
+    let resumeAt = -1;
+    blocks.forEach(function (b) {
+      if (t < b.e && b.s < t + inc && b.e > resumeAt) resumeAt = b.e;
+    });
+    if (resumeAt !== -1) { t = resumeAt; continue; }
     slots.push({ start: toHHMM_(t), end: toHHMM_(t + inc) });
+    t += inc + brk;
   }
   return slots;
 }
@@ -467,6 +557,8 @@ function getScheduleForCode_(code) {
     grade: cls.Grade,
     teacher: cls.Teacher,
     incrementMin: Number(cls.IncrementMin) || DEFAULT_INCREMENT,
+    breakMin: breakMinFor_(cls),
+    blocked: BLOCKED_TIMES,
     days: days,
   };
 }
@@ -855,6 +947,8 @@ function getTeacherView_(token) {
     startTime: slotKey_(cls.StartTime),
     endTime: slotKey_(cls.EndTime),
     incrementMin: Number(cls.IncrementMin) || DEFAULT_INCREMENT,
+    breakMin: breakMinFor_(cls),
+    blocked: BLOCKED_TIMES,
     days: CONF_DAYS,
     bookings: bookings.map(bookingOut_),
   };
@@ -867,6 +961,9 @@ function updateSchedule_(body) {
   const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
   const start = String(body.startTime || ''), end = String(body.endTime || '');
   const inc = Number(body.incrementMin);
+  // An older page that doesn't send a break keeps the class's current one.
+  const brk = (body.breakMin === undefined || body.breakMin === null || body.breakMin === '')
+    ? breakMinFor_(cls) : Number(body.breakMin);
   if (!hhmm.test(start) || !hhmm.test(end)) return { ok: false, error: 'Please pick a start and end time.' };
   if (minutesFromTimeValue_(start) >= minutesFromTimeValue_(end)) {
     return { ok: false, error: 'End time needs to be after start time.' };
@@ -874,11 +971,14 @@ function updateSchedule_(body) {
   if (ALLOWED_INCREMENTS.indexOf(inc) === -1) {
     return { ok: false, error: 'Conference length must be 10, 15, 20 or 30 minutes.' };
   }
+  if (ALLOWED_BREAKS.indexOf(brk) === -1) {
+    return { ok: false, error: 'Break between conferences must be none, 5 or 10 minutes.' };
+  }
 
   const result = withLock_(function () {
     // Every family already booked must land exactly on a slot in the new
     // schedule. Otherwise they'd drop off the grid or overlap a new slot.
-    const newSlots = generateSlots_({ StartTime: start, EndTime: end, IncrementMin: inc });
+    const newSlots = generateSlots_({ StartTime: start, EndTime: end, IncrementMin: inc, BreakMin: brk }, BLOCKED_TIMES);
     const fits = {};
     newSlots.forEach(function (s) { fits[s.start + '-' + s.end] = true; });
     const conflicts = sortBookings_(getBookingsForClass_(cls.ClassID)).filter(function (b) {
@@ -893,12 +993,13 @@ function updateSchedule_(body) {
         ok: false,
         error: 'Nothing was saved. ' + conflicts.length + (conflicts.length === 1 ? ' family is' : ' families are') +
           ' already booked at a time the new hours would remove or overlap (' + list +
-          (conflicts.length > 5 ? '; and more' : '') + '). Keep hours that include those times, ' +
+          (conflicts.length > 5 ? '; and more' : '') + '). Keep hours, a conference length and a break that include those times, ' +
           'or contact the school office to move those families first.',
       };
     }
 
     const sheet = getSheet_(SHEET_NAME_CLASSES);
+    const breakCol = ensureBreakColumn_(sheet);
     const values = sheet.getDataRange().getValues();
     const headers = values[0];
     const idCol = headers.indexOf('ClassID');
@@ -907,6 +1008,7 @@ function updateSchedule_(body) {
         sheet.getRange(r + 1, headers.indexOf('StartTime') + 1).setValue("'" + start);
         sheet.getRange(r + 1, headers.indexOf('EndTime') + 1).setValue("'" + end);
         sheet.getRange(r + 1, headers.indexOf('IncrementMin') + 1).setValue(inc);
+        sheet.getRange(r + 1, breakCol).setValue(brk);
         break;
       }
     }
@@ -959,6 +1061,7 @@ function getAdminView_(pin) {
       startTime: slotKey_(cls.StartTime),
       endTime: slotKey_(cls.EndTime),
       incrementMin: Number(cls.IncrementMin) || DEFAULT_INCREMENT,
+      breakMin: breakMinFor_(cls),
       totalSlots: totalSlots,
       booked: bookings.length,
       remaining: Math.max(0, totalSlots - bookings.length),
@@ -976,6 +1079,7 @@ function getAdminView_(pin) {
     ok: true,
     generatedAt: new Date().toISOString(),
     totals: { totalSlots: totalSlots, totalBooked: totalBooked },
+    blocked: BLOCKED_TIMES,
     emailQuota: emailQuota,
     classes: classSummaries,
   };
