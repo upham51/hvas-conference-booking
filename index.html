@@ -353,10 +353,22 @@
     if (!openSlots.length) {
       el('slotArea').innerHTML = `<div class="empty-state">This teacher hasn't set up conference times yet. Please check back soon.</div>`;
     } else {
-      el('slotArea').innerHTML = `<div class="slot-grid">` + openSlots.map((sl) => {
+      // A blocked window (the dinner break) gets a marker where the gap falls,
+      // but only when there are conferences on both sides of it.
+      const mins = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
+      const markers = (s.blocked || []).filter((b) =>
+        openSlots.some((x) => mins(x.end) <= mins(b.start)) && openSlots.some((x) => mins(x.start) >= mins(b.end)));
+      const markerHtml = (b) => `<div class="slot-break" role="note">${esc(b.label)}, ${formatRange(b.start, b.end)}</div>`;
+      const cells = [];
+      const placed = new Set();
+      openSlots.forEach((sl) => {
+        markers.forEach((b) => {
+          if (!placed.has(b) && mins(sl.start) >= mins(b.end)) { placed.add(b); cells.push(markerHtml(b)); }
+        });
         const isSel = state.selected && state.selected.start === sl.start && state.activeDay === state.selected.day;
-        return `<div class="slot ${sl.taken ? 'taken' : ''} ${isSel ? 'selected' : ''}" data-start="${esc(sl.start)}" data-end="${esc(sl.end)}">${formatTime(sl.start)}</div>`;
-      }).join('') + `</div>`;
+        cells.push(`<div class="slot ${sl.taken ? 'taken' : ''} ${isSel ? 'selected' : ''}" data-start="${esc(sl.start)}" data-end="${esc(sl.end)}">${formatTime(sl.start)}</div>`);
+      });
+      el('slotArea').innerHTML = `<div class="slot-grid">` + cells.join('') + `</div>`;
 
       document.querySelectorAll('.slot:not(.taken)').forEach((elm) => {
         elm.addEventListener('click', () => {
@@ -383,6 +395,12 @@
     state.selected = null;
     renderBookScreen();
   });
+
+  // "5:00 to 5:30 PM" when both ends share AM/PM, otherwise both written out.
+  function formatRange(a, b) {
+    const fa = formatTime(a), fb = formatTime(b);
+    return fa.slice(-2) === fb.slice(-2) ? `${fa.slice(0, -3)} to ${fb}` : `${fa} to ${fb}`;
+  }
 
   function formatTime(hhmm) {
     const [h, m] = hhmm.split(':').map(Number);

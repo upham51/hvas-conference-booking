@@ -45,7 +45,7 @@
     <div class="center-col card fade-in" style="max-width:640px;">
       <div class="card-pad">
         <h2 style="font-size:19px; margin-bottom:4px;">Your Hours: Nov 4 &amp; 5</h2>
-        <p class="lead" style="margin:6px 0 22px; text-align:left; font-size:14.5px;">Pick when your conferences start, end, and how long each one is. This applies to both days.</p>
+        <p class="lead" style="margin:6px 0 22px; text-align:left; font-size:14.5px;">Pick when your conferences start, end, and how long each one is. This applies to both days. Every class stops for a dinner break from 5:00 to 5:30 PM, so no conferences run then and your next one starts at 5:30.</p>
 
         <div class="settings-row">
           <div class="field">
@@ -55,6 +55,14 @@
           <div class="field">
             <label for="endTime">End Time</label>
             <select id="endTime"></select>
+          </div>
+          <div class="field">
+            <label for="breakMin">Break between conferences</label>
+            <select id="breakMin">
+              <option value="0">None</option>
+              <option value="5">5 min</option>
+              <option value="10">10 min</option>
+            </select>
           </div>
           <div class="field">
             <label for="incrementMin">Length of Each Conference</label>
@@ -146,6 +154,7 @@
     timeOptions(el('startTime'), data.startTime);
     timeOptions(el('endTime'), data.endTime);
     el('incrementMin').value = String(data.incrementMin);
+    el('breakMin').value = String(data.breakMin);
 
     if (!data.bookings.length) {
       el('bookingList').innerHTML = `<div class="empty-state" style="padding:20px 0;">No sign-ups yet. Check back closer to conference dates.</div>`;
@@ -167,6 +176,7 @@
     const startTime = el('startTime').value;
     const endTime = el('endTime').value;
     const incrementMin = Number(el('incrementMin').value);
+    const breakMin = Number(el('breakMin').value);
 
     if (startTime >= endTime) {
       el('saveError').textContent = 'End time needs to be after start time.';
@@ -177,7 +187,7 @@
     el('saveBtn').disabled = true;
     el('saveBtnText').innerHTML = '<span class="spinner"></span>';
     try {
-      const res = await HVA_API.post({ action: 'updateSchedule', token, startTime, endTime, incrementMin });
+      const res = await HVA_API.post({ action: 'updateSchedule', token, startTime, endTime, incrementMin, breakMin });
       if (!res.ok) {
         el('saveError').textContent = res.error || 'Something went wrong saving your schedule.';
         el('saveError').classList.add('show');
