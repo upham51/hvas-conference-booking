@@ -856,7 +856,7 @@ function sendConfirmation_(cls, dayDef, slot, info, manageToken) {
       'Day: ' + dayDef.label + '\n' +
       'Time: ' + formatTime12_(slot.start) + ' to ' + formatTime12_(slot.end) + '\n\n';
     if (manageToken) {
-      msg += 'Need to cancel or pick a different time? Use this link:\n' +
+      msg += 'Need to change your time? Use this link to cancel, then pick a new time:\n' +
         SITE_BASE_URL + '?manage=' + manageToken + '\n\n';
     } else {
       msg += 'If your plans change, please contact the school office.\n\n';
