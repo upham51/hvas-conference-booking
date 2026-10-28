@@ -430,13 +430,33 @@ function bookingHeadersHave_(name) {
   return headers.indexOf(name) !== -1;
 }
 
+// Letters and digits only, upper case, so "1st grade", "1st-Grade" and
+// "1STGRADE" are all the same code.
+function normalizeCode_(v) {
+  return String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// The other ways a family might type a class's code: its grade, as written
+// ("1stgrade", "prek", "kindergarten") or spelled out ("firstgrade").
+function gradeCodes_(grade) {
+  const g = normalizeCode_(grade);
+  const words = { '1ST': 'FIRST', '2ND': 'SECOND', '3RD': 'THIRD', '4TH': 'FOURTH', '5TH': 'FIFTH', '6TH': 'SIXTH', '7TH': 'SEVENTH', '8TH': 'EIGHTH' };
+  const codes = g ? [g] : [];
+  const m = g.match(/^(\d)(ST|ND|RD|TH)GRADE$/);
+  if (m) codes.push(words[m[1] + m[2]] + 'GRADE', 'GRADE' + m[1]);
+  return codes;
+}
+
+// A class is found by its parent code first. If nothing matches that, a grade
+// name works too, but only when exactly one active class has that grade.
 function findClassByCode_(code) {
-  if (!code) return null;
-  const norm = String(code).trim().toUpperCase();
-  const classes = readTable_(getSheet_(SHEET_NAME_CLASSES));
-  return classes.find(function (c) {
-    return String(c.ParentCode).toUpperCase() === norm && c.Active;
-  }) || null;
+  const norm = normalizeCode_(code);
+  if (!norm) return null;
+  const classes = readTable_(getSheet_(SHEET_NAME_CLASSES)).filter(function (c) { return c.Active; });
+  const byCode = classes.find(function (c) { return normalizeCode_(c.ParentCode) === norm; });
+  if (byCode) return byCode;
+  const byGrade = classes.filter(function (c) { return gradeCodes_(c.Grade).indexOf(norm) !== -1; });
+  return byGrade.length === 1 ? byGrade[0] : null;
 }
 
 function findClassByToken_(token) {
