@@ -169,6 +169,31 @@ function freshClass() {
     [admin.classes.filter((c) => c.isTest).length, admin.totals.totalSlots], [1, 46]); // walker 10 a day on a 10 min break + sexton 13 a day, over two days
 }
 
+// ---- confirmation email wording, ping, and the admin lockout
+{
+  const t = freshClass();
+  book(t, 'day2', '15:00');
+  const toParent = t.mail.find((m) => m.to === 'pat@example.com');
+  expect('the confirmation email uses the agreed wording, link on the next line',
+    /Need to change your time\? Use this link to cancel, then pick a new time\nhttps?:\/\/\S+\?manage=\S+/.test(toParent.body), true);
+  expect('the old wording is gone', /pick a different time/.test(toParent.body), false);
+
+  t.ctx.ContentService = { MimeType: { JSON: 'json' }, createTextOutput: (text) => ({ text, setMimeType() { return this; } }) };
+  t.sheets.Classes = null; // a ping must not need the sheet
+  expect('ping answers ok without touching the sheet', JSON.parse(t.ctx.doGet({ parameter: { action: 'ping' } }).text), { ok: true });
+}
+
+{
+  const t = freshClass();
+  for (let i = 0; i < 20; i++) t.call('getAdminView_', undefined);
+  for (let i = 0; i < 20; i++) t.call('getAdminView_', '');
+  expect('requests with no PIN never lock the dashboard', t.call('getAdminView_', 'a-long-enough-pin').ok, true);
+  expect('a request with no PIN gets the same error', t.call('getAdminView_', '').error, 'Incorrect PIN.');
+
+  for (let i = 0; i < 5; i++) t.call('getAdminView_', 'wrong-pin-123');
+  expect('wrong PINs still lock the dashboard', /Too many wrong PINs/.test(t.call('getAdminView_', 'a-long-enough-pin').error), true);
+}
+
 if (failures.length) {
   console.error('\n' + failures.length + ' backend check(s) failed.');
   process.exit(1);

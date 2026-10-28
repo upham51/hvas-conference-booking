@@ -271,6 +271,29 @@ function createDailyReminderTrigger() {
   );
 }
 
+// Keeps the web app from going cold, which is what made the first class-code
+// lookup take about 25 seconds. Calls the ping action on the deployed web
+// app every 5 minutes. Safe to re-run, it clears its old trigger first.
+// Run it once from the Apps Script editor and approve the new permission
+// (connect to an external service) when asked.
+function createKeepWarmTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'keepWarm_') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  ScriptApp.newTrigger('keepWarm_').timeBased().everyMinutes(5).create();
+  notify_('Keep-warm is on. The site will be pinged every 5 minutes so the first lookup stays fast.');
+}
+
+function keepWarm_() {
+  try {
+    UrlFetchApp.fetch(ScriptApp.getService().getUrl() + '?action=ping', { muteHttpExceptions: true });
+  } catch (err) {
+    console.error(err); // a missed ping only means one slow first lookup
+  }
+}
+
 // Run from the Apps Script editor before sending the link to families. It
 // changes nothing, it only reports what is and isn't ready. Results show in
 // the execution log (and as a popup if the spreadsheet is open).
@@ -281,6 +304,12 @@ function checkLaunchReadiness() {
   });
   lines.push((reminder ? 'OK   ' : 'FIX  ') + 'Day-before reminder trigger ' +
     (reminder ? 'is installed.' : 'is NOT installed. Run createDailyReminderTrigger().'));
+
+  const warm = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'keepWarm_';
+  });
+  lines.push((warm ? 'OK   ' : 'WARN ') + 'Keep-warm trigger ' +
+    (warm ? 'is installed.' : 'is NOT installed. The first lookup may be slow. Run createKeepWarmTrigger().'));
 
   const pin = PropertiesService.getScriptProperties().getProperty('ADMIN_PIN') || '';
   const pinOk = pin.length >= MIN_ADMIN_PIN_LEN && pin !== '1289';
@@ -330,6 +359,7 @@ function doGet(e) {
     if (action === 'teacher') return jsonOut(getTeacherView_(e.parameter.token));
     if (action === 'admin') return jsonOut(getAdminView_(e.parameter.pin));
     if (action === 'config') return jsonOut(getPublicConfig_());
+    if (action === 'ping') return jsonOut({ ok: true }); // keep-warm, never touches the sheet
     if (action === 'manage') return jsonOut(getManageView_(e.parameter.token));
     return jsonOut({ ok: false, error: 'Unknown action.' });
   } catch (err) {
@@ -856,7 +886,7 @@ function sendConfirmation_(cls, dayDef, slot, info, manageToken) {
       'Day: ' + dayDef.label + '\n' +
       'Time: ' + formatTime12_(slot.start) + ' to ' + formatTime12_(slot.end) + '\n\n';
     if (manageToken) {
-      msg += 'Need to change your time? Use this link to cancel, then pick a new time:\n' +
+      msg += 'Need to change your time? Use this link to cancel, then pick a new time\n' +
         SITE_BASE_URL + '?manage=' + manageToken + '\n\n';
     } else {
       msg += 'If your plans change, please contact the school office.\n\n';
@@ -1247,7 +1277,10 @@ function checkAdminPin_(pin) {
     return 'The dashboard is locked until a longer admin PIN is set. In Apps Script, open ' +
       'Project Settings > Script properties and set ADMIN_PIN to at least ' + MIN_ADMIN_PIN_LEN + ' characters.';
   }
-  if (!pin || String(pin) !== realPin) {
+  // A request with no PIN at all is not a guess, so it never counts toward
+  // the lockout. A stray or scripted request cannot lock the principal out.
+  if (!pin) return 'Incorrect PIN.';
+  if (String(pin) !== realPin) {
     cache.put('pin_fails', String(fails + 1), PIN_LOCKOUT_SEC);
     return 'Incorrect PIN.';
   }

@@ -55,6 +55,7 @@
         <button class="btn btn-primary" id="codeSubmit">
           <span id="codeSubmitText">Find My Class</span>
         </button>
+        <p class="hint" id="codeSlow" style="display:none; margin-top:12px; text-align:center;">Still loading your class, this can take a few seconds the first time.</p>
       </div>
     </div>
 
@@ -292,6 +293,9 @@
       return;
     }
     setBtnLoading(el('codeSubmit'), el('codeSubmitText'), true);
+    // The first lookup after a quiet spell can take a while. Say so plainly
+    // instead of leaving a bare spinner. This is not an error and nothing retries.
+    const slowTimer = setTimeout(() => { el('codeSlow').style.display = 'block'; }, 4000);
     try {
       const res = await HVA_API.get({ action: 'schedule', code });
       if (!res.ok) {
@@ -309,6 +313,8 @@
       el('codeError').textContent = 'Could not reach the server. Please try again.';
       el('codeError').classList.add('show');
     } finally {
+      clearTimeout(slowTimer);
+      el('codeSlow').style.display = 'none';
       setBtnLoading(el('codeSubmit'), el('codeSubmitText'), false, 'Find My Class');
     }
   });
