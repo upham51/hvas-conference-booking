@@ -39,6 +39,26 @@ function freshClass() {
   expect('parent schedule carries the blocked window', sched.blocked, [{ start: '17:00', end: '17:45', label: 'Dinner break' }]);
 }
 
+// ---- class codes
+{
+  const t = load([
+    ['ClassID', 'Grade', 'Teacher', 'ParentCode', 'TeacherToken', 'StartTime', 'EndTime', 'IncrementMin', 'Active'],
+    ['walker', 'Preschool', 'Selina Walker', 'WALKER', 'tok-walker', '14:00', '19:00', 15, true],
+    ['segoria', 'Forest School', 'Lizzie Segoria', 'SEGORIA', 'tok-seg', '14:00', '19:00', 15, true],
+    ['sexton', '1st Grade', 'Debbie Sexton & Fae Haffner', 'SEXTON', 'tok-sexton', '14:00', '19:00', 15, true],
+    ['hays', '5th Grade', 'Brian Hays', 'HAYS', 'tok-hays', '14:00', '19:00', 15, true],
+  ]);
+  const id = (code) => { const r = t.call('findClassByCode_', code); return r && r.ClassID; };
+  expect('the teacher code works in any case', [id('sexton'), id(' Sexton ')], ['sexton', 'sexton']);
+  expect('a grade works: firstgrade, 1st grade, 1stgrade, 1st-Grade, grade1',
+    ['firstgrade', 'First Grade', '1st grade', '1stgrade', '1st-Grade', 'grade1'].map(id), Array(6).fill('sexton'));
+  expect('other grade names work', [id('fifthgrade'), id('forest school'), id('preschool')], ['hays', 'segoria', 'walker']);
+  expect('an unknown code is not found', [id('ninthgrade'), id(''), id('!!')], [null, null, null]);
+
+  t.sheets.Classes.rows.push(['sexton2', '1st Grade', 'Someone Else', 'OTHER', 'tok-x', '14:00', '19:00', 15, true]);
+  expect('a grade shared by two classes matches neither, a teacher code still works', [id('firstgrade'), id('other')], [null, 'sexton2']);
+}
+
 // ---- per-day hours and closing a day
 {
   const t = freshClass();
