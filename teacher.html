@@ -9,7 +9,7 @@
 </head>
 <body>
 
-<div class="topbar-dark">
+<div class="topbar-dark screen-only">
   <div class="wrap">
     <div class="topbar" style="padding-top:0;">
       <div class="brand">
@@ -23,7 +23,7 @@
   </div>
 </div>
 
-<div class="wrap">
+<div class="wrap screen-only">
   <div id="loadingState" class="hero">
     <p class="lead">Loading your schedule…</p>
   </div>
@@ -42,20 +42,18 @@
       <p class="lead" style="margin-top:10px;">This is your own conference schedule. Changes here update automatically, nothing else to send in.</p>
     </div>
 
+    <div class="test-banner" id="testBanner" style="display:none;">
+      This is the practice class. Families can book it with the code <strong id="testCode"></strong>, and everything on this page works as it does for a real teacher. Its bookings are left out of the school totals.
+    </div>
+
     <div class="center-col card fade-in" style="max-width:640px;">
       <div class="card-pad">
         <h2 style="font-size:19px; margin-bottom:4px;">Your Hours: Nov 4 &amp; 5</h2>
-        <p class="lead" style="margin:6px 0 22px; text-align:left; font-size:14.5px;">Pick when your conferences start, end, and how long each one is. This applies to both days. Every class stops for a dinner break from 5:00 to 5:30 PM, so no conferences run then and your next one starts at 5:30.</p>
+        <p class="lead" style="margin:6px 0 22px; text-align:left; font-size:14.5px;">Set the hours for each day, or turn a day off if you are not holding conferences that day. Every class stops for a <span id="dinnerNote">dinner break</span>, so no conferences run then and your next one starts when it ends.</p>
+
+        <div id="dayEditors"></div>
 
         <div class="settings-row">
-          <div class="field">
-            <label for="startTime">Start Time</label>
-            <select id="startTime"></select>
-          </div>
-          <div class="field">
-            <label for="endTime">End Time</label>
-            <select id="endTime"></select>
-          </div>
           <div class="field">
             <label for="breakMin">Break between conferences</label>
             <select id="breakMin">
@@ -81,13 +79,21 @@
           <span id="saveBtnText">Save My Schedule</span>
         </button>
 
-        <p class="hint" style="margin-top:14px;">Your classroom code for parents is <strong id="tCode" style="color:var(--navy-800);"></strong>. Once families have booked, you can only change your hours in ways that keep every booked time. To move a booked family, contact the office.</p>
+        <p class="hint" style="margin-top:14px;">Your classroom code for parents is <strong id="tCode" style="color:var(--navy-800);"></strong>. Once families have booked, you can only change your hours or turn a day off in ways that keep every booked time. To free a time, cancel that conference from the list below first.</p>
       </div>
     </div>
 
     <div class="center-col card fade-in" style="max-width:640px; margin-top:20px;">
       <div class="card-pad">
-        <h2 style="font-size:19px;">Who's Signed Up</h2>
+        <div class="list-head">
+          <h2 style="font-size:19px;">Who's Signed Up</h2>
+          <div class="print-buttons">
+            <button class="btn btn-ghost btn-small" id="printSignupsBtn">Print sign-up list</button>
+            <button class="btn btn-ghost btn-small" id="printScheduleBtn">Print full schedule</button>
+          </div>
+        </div>
+        <div class="alert alert-error" id="listError" style="margin-top:12px;"></div>
+        <div class="alert alert-success" id="listSuccess" style="margin-top:12px;"></div>
         <div id="bookingList" class="booking-list"></div>
       </div>
     </div>
@@ -99,24 +105,26 @@
   </footer>
 </div>
 
+<div id="printSchedule" class="print-only print-sheet"></div>
+<div id="printSignups" class="print-only print-sheet"></div>
+
 <script src="config.js"></script>
 <script src="api.js"></script>
 <script>
   const el = (id) => document.getElementById(id);
   const params = new URLSearchParams(window.location.search);
   const token = params.get('t');
+  let DATA = null;
+  let pendingCancel = null; // bookingId waiting for "yes, cancel it"
 
-  function timeOptions(selectEl, selected) {
+  function timeOptionsHtml(selected) {
     const opts = [];
     for (let m = 6 * 60; m <= 20 * 60; m += 15) {
       const h = Math.floor(m / 60), mm = m % 60;
       const val = `${h.toString().padStart(2,'0')}:${mm.toString().padStart(2,'0')}`;
-      const period = h >= 12 ? 'PM' : 'AM';
-      const h12 = h % 12 === 0 ? 12 : h % 12;
-      const label = `${h12}:${mm.toString().padStart(2,'0')} ${period}`;
-      opts.push(`<option value="${val}" ${val === selected ? 'selected' : ''}>${label}</option>`);
+      opts.push(`<option value="${val}" ${val === selected ? 'selected' : ''}>${formatTime(val)}</option>`);
     }
-    selectEl.innerHTML = opts.join('');
+    return opts.join('');
   }
 
   function formatTime(hhmm) {
@@ -126,6 +134,14 @@
     const h12 = h % 12 === 0 ? 12 : h % 12;
     return `${h12}:${m.toString().padStart(2, '0')} ${period}`;
   }
+
+  // "5:00 to 5:45 PM" when both ends share AM/PM, otherwise both written out.
+  function formatRange(a, b) {
+    const fa = formatTime(a), fb = formatTime(b);
+    return fa.slice(-2) === fb.slice(-2) ? `${fa.slice(0, -3)} to ${fb}` : `${fa} to ${fb}`;
+  }
+
+  const mins = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
 
   async function load() {
     if (!token) { showError(); return; }
@@ -143,56 +159,215 @@
     el('errorState').style.display = '';
   }
 
+  function renderDayEditors(data) {
+    el('dayEditors').innerHTML = data.days.map((d) => `
+      <div class="day-edit${d.closed ? ' is-off' : ''}" data-day="${esc(d.key)}">
+        <div class="day-edit-head">
+          <strong>${esc(d.label)}</strong>
+          <label class="day-off"><input type="checkbox" id="dayOff-${esc(d.key)}" ${d.closed ? 'checked' : ''} /> No conferences this day</label>
+        </div>
+        <div class="settings-row">
+          <div class="field">
+            <label for="dayStart-${esc(d.key)}">Start Time</label>
+            <select id="dayStart-${esc(d.key)}" ${d.closed ? 'disabled' : ''}>${timeOptionsHtml(d.startTime)}</select>
+          </div>
+          <div class="field">
+            <label for="dayEnd-${esc(d.key)}">End Time</label>
+            <select id="dayEnd-${esc(d.key)}" ${d.closed ? 'disabled' : ''}>${timeOptionsHtml(d.endTime)}</select>
+          </div>
+        </div>
+      </div>
+    `).join('');
+    data.days.forEach((d) => {
+      el('dayOff-' + d.key).addEventListener('change', (e) => {
+        el('dayStart-' + d.key).disabled = e.target.checked;
+        el('dayEnd-' + d.key).disabled = e.target.checked;
+        e.target.closest('.day-edit').classList.toggle('is-off', e.target.checked);
+      });
+    });
+  }
+
+  function renderBookings(data) {
+    if (!data.bookings.length) {
+      el('bookingList').innerHTML = `<div class="empty-state" style="padding:20px 0;">No sign-ups yet. Check back closer to conference dates.</div>`;
+      return;
+    }
+    el('bookingList').innerHTML = data.bookings.map((b) => {
+      const asking = pendingCancel === b.bookingId;
+      return `
+        <div class="booking-item">
+          <div class="info">
+            <div class="who">${esc(b.studentName)} · ${esc(b.parentName)}</div>
+            <div class="when">${esc(b.dayLabel)} · ${formatTime(b.start)}–${formatTime(b.end)}</div>
+            <div class="contact">${esc(b.email)}${b.phone ? ' · ' + esc(b.phone) : ''}</div>
+          </div>
+          <div class="booking-actions">
+            ${asking ? `
+              <div class="confirm-text">Cancel ${esc(b.studentName)}'s conference on ${esc(b.dayLabel)} at ${formatTime(b.start)}? We email the family right away and the time opens up for others.</div>
+              <button class="btn btn-danger btn-small" data-act="do" data-id="${esc(b.bookingId)}">Yes, cancel it</button>
+              <button class="btn btn-ghost btn-small" data-act="keep">Keep it</button>
+            ` : `
+              <button class="btn btn-ghost btn-small" data-act="ask" data-id="${esc(b.bookingId)}">Cancel conference</button>
+            `}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  el('bookingList').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const act = btn.dataset.act;
+    if (act === 'ask') { pendingCancel = btn.dataset.id; renderBookings(DATA); return; }
+    if (act === 'keep') { pendingCancel = null; renderBookings(DATA); return; }
+    if (act !== 'do') return;
+
+    el('listError').classList.remove('show');
+    el('listSuccess').classList.remove('show');
+    const b = DATA.bookings.find((x) => x.bookingId === btn.dataset.id);
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    try {
+      const res = await HVA_API.post({ action: 'teacherCancel', token, bookingId: btn.dataset.id });
+      pendingCancel = null;
+      if (!res.ok) {
+        el('listError').textContent = res.error || 'Something went wrong. Nothing was cancelled.';
+        el('listError').classList.add('show');
+        if (res.code === 'not_found') await load();
+        else renderBookings(DATA);
+        return;
+      }
+      render(res);
+      el('listSuccess').textContent = `Cancelled${b ? ' ' + b.studentName + '\'s conference' : ''}. The family has been emailed and the time is open again.`;
+      el('listSuccess').classList.add('show');
+    } catch (err) {
+      el('listError').textContent = 'Could not reach the server, so we can\'t tell whether it was cancelled. Refresh this page to check the list before trying again.';
+      el('listError').classList.add('show');
+      btn.disabled = false;
+      btn.textContent = 'Yes, cancel it';
+    }
+  });
+
   function render(data) {
+    DATA = data;
     el('loadingState').style.display = 'none';
     el('mainState').style.display = '';
 
     el('tGrade').textContent = data.grade;
     el('tTeacher').textContent = data.teacher;
     el('tCode').textContent = data.parentCode;
+    el('testBanner').style.display = data.isTest ? '' : 'none';
+    el('testCode').textContent = data.parentCode;
+    el('dinnerNote').textContent = (data.blocked || []).map((b) => `${b.label.toLowerCase()} from ${formatRange(b.start, b.end)}`).join(', ') || 'break';
 
-    timeOptions(el('startTime'), data.startTime);
-    timeOptions(el('endTime'), data.endTime);
+    renderDayEditors(data);
     el('incrementMin').value = String(data.incrementMin);
     el('breakMin').value = String(data.breakMin);
-
-    if (!data.bookings.length) {
-      el('bookingList').innerHTML = `<div class="empty-state" style="padding:20px 0;">No sign-ups yet. Check back closer to conference dates.</div>`;
-    } else {
-      el('bookingList').innerHTML = data.bookings.map((b) => `
-        <div class="booking-item">
-          <div>
-            <div class="who">${esc(b.studentName)} · ${esc(b.parentName)}</div>
-            <div class="when">${esc(b.dayLabel)} · ${formatTime(b.start)}–${formatTime(b.end)}</div>
-          </div>
-        </div>
-      `).join('');
-    }
+    renderBookings(data);
+    buildPrintViews(data);
   }
 
+  // ---- Printing ----
+  function printHead(title, data) {
+    return `<div class="print-head">
+      <div class="print-school">Hood View Adventist School · Parent–Teacher Conferences</div>
+      <h1>${esc(title)}</h1>
+      <div class="print-meta">${esc(data.teacher)} · ${esc(data.grade)}</div>
+    </div>`;
+  }
+  function printFoot() {
+    const now = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    return `<div class="print-foot">Printed ${esc(now)}. Families can cancel or change their time themselves, so check the live page for the latest.</div>`;
+  }
+  function dinnerRowHtml(b, cols) {
+    return `<tr class="dinner"><td colspan="${cols}">${esc(b.label)}, ${formatRange(b.start, b.end)}</td></tr>`;
+  }
+
+  function buildPrintViews(data) {
+    const blocked = data.blocked || [];
+
+    // Full timetable: every time of each day, booked or open, dinner break included.
+    el('printSchedule').innerHTML = printHead('Conference schedule', data) + data.days.map((d, i) => {
+      if (d.closed) {
+        return `<section class="print-day${i ? ' new-page' : ''}"><h2>${esc(d.label)}</h2><p>No conferences this day.</p></section>`;
+      }
+      const placed = new Set();
+      const rows = [];
+      d.slots.forEach((sl) => {
+        blocked.forEach((b) => {
+          if (!placed.has(b) && mins(sl.start) >= mins(b.end) && d.slots.some((x) => mins(x.end) <= mins(b.start))) {
+            placed.add(b); rows.push(dinnerRowHtml(b, 3));
+          }
+        });
+        const t = `${formatTime(sl.start)} – ${formatTime(sl.end)}`;
+        if (sl.booking) {
+          const b = sl.booking;
+          rows.push(`<tr><td class="t">${t}</td><td><strong>${esc(b.studentName)}</strong><br>${esc(b.parentName)}</td><td class="small">${esc(b.email)}${b.phone ? '<br>' + esc(b.phone) : ''}</td></tr>`);
+        } else {
+          rows.push(`<tr class="open"><td class="t">${t}</td><td colspan="2">Open</td></tr>`);
+        }
+      });
+      return `<section class="print-day${i ? ' new-page' : ''}">
+        <h2>${esc(d.label)} <span>${formatTime(d.startTime)} to ${formatTime(d.endTime)}</span></h2>
+        <table><thead><tr><th>Time</th><th>Family</th><th>Contact</th></tr></thead><tbody>${rows.join('')}</tbody></table>
+      </section>`;
+    }).join('') + printFoot();
+
+    // Sign-up list: only the families who booked, by day and time, with room to tick people off.
+    const total = data.bookings.length;
+    el('printSignups').innerHTML = printHead('Who\'s signed up', data) + data.days.map((d, i) => {
+      const list = data.bookings.filter((b) => b.day === d.key);
+      const body = d.closed && !list.length
+        ? '<p>No conferences this day.</p>'
+        : !list.length
+          ? '<p>No sign-ups yet.</p>'
+          : `<table><thead><tr><th>Time</th><th>Student</th><th>Parent</th><th>Email</th><th>Phone</th><th>Here</th></tr></thead><tbody>${
+              list.map((b) => `<tr><td class="t">${formatTime(b.start)}</td><td><strong>${esc(b.studentName)}</strong></td><td>${esc(b.parentName)}</td><td class="small">${esc(b.email)}</td><td class="small">${esc(b.phone || '')}</td><td><span class="box"></span></td></tr>`).join('')
+            }</tbody></table>`;
+      return `<section class="print-day"><h2>${esc(d.label)} <span>${list.length} ${list.length === 1 ? 'family' : 'families'}</span></h2>${body}</section>`;
+    }).join('') + `<div class="print-foot"><strong>${total}</strong> ${total === 1 ? 'family' : 'families'} signed up in total.</div>` + printFoot();
+  }
+
+  function printMode(mode) {
+    if (!DATA) return;
+    const cls = 'print-' + mode;
+    document.body.classList.add(cls);
+    const done = () => { document.body.classList.remove(cls); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done);
+    window.print();
+  }
+  el('printSignupsBtn').addEventListener('click', () => printMode('signups'));
+  el('printScheduleBtn').addEventListener('click', () => printMode('schedule'));
+
+  // ---- Save hours ----
   el('saveBtn').addEventListener('click', async () => {
     el('saveError').classList.remove('show');
     el('saveSuccess').classList.remove('show');
-    const startTime = el('startTime').value;
-    const endTime = el('endTime').value;
+    const days = {};
+    for (const d of DATA.days) {
+      const closed = el('dayOff-' + d.key).checked;
+      const startTime = el('dayStart-' + d.key).value;
+      const endTime = el('dayEnd-' + d.key).value;
+      if (!closed && startTime >= endTime) {
+        el('saveError').textContent = `End time needs to be after start time on ${d.label}. Nothing was saved.`;
+        el('saveError').classList.add('show');
+        return;
+      }
+      days[d.key] = { closed, startTime, endTime };
+    }
     const incrementMin = Number(el('incrementMin').value);
     const breakMin = Number(el('breakMin').value);
-
-    if (startTime >= endTime) {
-      el('saveError').textContent = 'End time needs to be after start time.';
-      el('saveError').classList.add('show');
-      return;
-    }
 
     el('saveBtn').disabled = true;
     el('saveBtnText').innerHTML = '<span class="spinner"></span>';
     try {
-      const res = await HVA_API.post({ action: 'updateSchedule', token, startTime, endTime, incrementMin, breakMin });
+      const res = await HVA_API.post({ action: 'updateSchedule', token, days, incrementMin, breakMin });
       if (!res.ok) {
         el('saveError').textContent = res.error || 'Something went wrong saving your schedule.';
         el('saveError').classList.add('show');
         return;
       }
+      pendingCancel = null;
       render(res);
       el('saveSuccess').classList.add('show');
     } catch (e) {

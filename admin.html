@@ -123,6 +123,14 @@
     return res;
   }
 
+  // Turning a day off greys out its times. One listener covers every row.
+  el('classTable').addEventListener('change', (e) => {
+    if (!e.target.classList.contains('day-off-box')) return;
+    const block = e.target.closest('.day-edit');
+    block.classList.toggle('is-off', e.target.checked);
+    block.querySelectorAll('select').forEach((sel) => { sel.disabled = e.target.checked; });
+  });
+
   el('pinInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('pinSubmit').click(); });
 
   el('pinSubmit').addEventListener('click', async () => {
@@ -166,22 +174,26 @@
     const btn = el('hoursSave-' + idx);
     errBox.classList.remove('show');
     okBox.classList.remove('show');
-    const startTime = el('hoursStart-' + idx).value;
-    const endTime = el('hoursEnd-' + idx).value;
+    const days = {};
+    for (const d of c.days) {
+      const closed = el(`hoursOff-${idx}-${d.key}`).checked;
+      const startTime = el(`hoursStart-${idx}-${d.key}`).value;
+      const endTime = el(`hoursEnd-${idx}-${d.key}`).value;
+      if (!closed && startTime >= endTime) {
+        errBox.textContent = `End time needs to be after start time on ${d.label}. Nothing was saved.`;
+        errBox.classList.add('show');
+        return;
+      }
+      days[d.key] = { closed, startTime, endTime };
+    }
     const incrementMin = Number(el('hoursInc-' + idx).value);
     const breakMin = Number(el('hoursBreak-' + idx).value);
-
-    if (startTime >= endTime) {
-      errBox.textContent = 'End time needs to be after start time. Nothing was saved.';
-      errBox.classList.add('show');
-      return;
-    }
 
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>';
     let res;
     try {
-      res = await HVA_API.post({ action: 'updateSchedule', token: c.teacherToken, startTime, endTime, incrementMin, breakMin });
+      res = await HVA_API.post({ action: 'updateSchedule', token: c.teacherToken, days, incrementMin, breakMin });
     } catch (e) {
       errBox.textContent = 'Could not reach the server, so nothing was saved. Please try again.';
       errBox.classList.add('show');
@@ -198,7 +210,10 @@
     }
 
     // Saved. Reload so the slot counts and totals match the new hours.
-    const msg = `Saved. Families now see ${hhmmLabel(startTime)} to ${hhmmLabel(endTime)}, ${incrementMin}-minute conferences, ${breakLabel(breakMin)}, on both days.`;
+    const dayText = c.days.map((d) => days[d.key].closed
+      ? `${d.label}: no conferences`
+      : `${d.label}: ${hhmmLabel(days[d.key].startTime)} to ${hhmmLabel(days[d.key].endTime)}`).join('; ');
+    const msg = `Saved. Families now see ${dayText}, ${incrementMin}-minute conferences, ${breakLabel(breakMin)}.`;
     try {
       const fresh = await tryLoad(PIN);
       if (fresh.ok) renderDashboard(fresh);
@@ -215,7 +230,7 @@
     const pct = data.totals.totalSlots ? Math.round((data.totals.totalBooked / data.totals.totalSlots) * 100) : 0;
     el('statBooked').textContent = data.totals.totalBooked;
     el('statOpen').textContent = totalOpen;
-    el('statClasses').textContent = data.classes.length;
+    el('statClasses').textContent = data.classes.filter((c) => !c.isTest).length;
     el('statPct').textContent = pct + '%';
     if (typeof data.emailQuota === 'number') {
       // Each booking sends 2 to 3 emails (parent plus teachers).
@@ -224,9 +239,10 @@
       el('quotaLine').style.display = '';
     }
 
-    CLASSES = data.classes;
+    // The practice class goes last so it never gets mixed in with real classrooms.
+    CLASSES = data.classes.filter((c) => !c.isTest).concat(data.classes.filter((c) => c.isTest));
     BLOCKED = data.blocked || [];
-    el('classTable').innerHTML = data.classes.map((c, i) => {
+    el('classTable').innerHTML = CLASSES.map((c, i) => {
       const cPct = c.totalSlots ? Math.round((c.booked / c.totalSlots) * 100) : 0;
       // The host serves clean URLs (/teacher, not /teacher.html).
       const teacherLink = `${window.location.origin}/teacher?t=${encodeURIComponent(c.teacherToken)}`;
@@ -235,7 +251,7 @@
           <div class="class-row-head">
             <div class="who">
               <div class="grade">${esc(c.grade)}</div>
-              <div class="teacher">${esc(c.teacher)} · Code: <strong>${esc(c.parentCode)}</strong></div>
+              <div class="teacher">${esc(c.teacher)} · Code: <strong>${esc(c.parentCode)}</strong>${c.isTest ? ' · <span class="eyebrow" style="margin:0;">Practice class, not in the totals</span>' : ''}</div>
             </div>
             <div class="fill-bar-wrap">
               <div class="fill-bar"><div style="width:${cPct}%"></div></div>
@@ -244,15 +260,24 @@
           </div>
           <div class="class-detail${openRows.has(c.classId) ? ' open' : ''}" id="detail-${i}">
             <div class="hours-edit">
+              ${c.days.map((d) => `
+                <div class="day-edit${d.closed ? ' is-off' : ''}">
+                  <div class="day-edit-head">
+                    <strong>${esc(d.label)}</strong>
+                    <label class="day-off"><input type="checkbox" class="day-off-box" id="hoursOff-${i}-${esc(d.key)}" ${d.closed ? 'checked' : ''} /> No conferences this day</label>
+                  </div>
+                  <div class="settings-row">
+                    <div class="field">
+                      <label for="hoursStart-${i}-${esc(d.key)}">Start Time</label>
+                      <select id="hoursStart-${i}-${esc(d.key)}" ${d.closed ? 'disabled' : ''}>${timeOptionsHtml(d.startTime)}</select>
+                    </div>
+                    <div class="field">
+                      <label for="hoursEnd-${i}-${esc(d.key)}">End Time</label>
+                      <select id="hoursEnd-${i}-${esc(d.key)}" ${d.closed ? 'disabled' : ''}>${timeOptionsHtml(d.endTime)}</select>
+                    </div>
+                  </div>
+                </div>`).join('')}
               <div class="settings-row">
-                <div class="field">
-                  <label for="hoursStart-${i}">Start Time</label>
-                  <select id="hoursStart-${i}">${timeOptionsHtml(c.startTime)}</select>
-                </div>
-                <div class="field">
-                  <label for="hoursEnd-${i}">End Time</label>
-                  <select id="hoursEnd-${i}">${timeOptionsHtml(c.endTime)}</select>
-                </div>
                 <div class="field">
                   <label for="hoursBreak-${i}">Break between conferences</label>
                   <select id="hoursBreak-${i}">
@@ -269,14 +294,17 @@
               <div class="alert alert-error" id="hoursError-${i}"></div>
               <div class="alert alert-success" id="hoursSuccess-${i}"></div>
               <div class="hours-edit-foot">
-                <p class="hours-edit-note">Applies to both days. Every class also stops for the ${esc(blockedText())}. Hours that would drop or overlap a booked family are refused and nothing is saved.</p>
+                <p class="hours-edit-note">Each day has its own hours, and conference length and break apply to both. Every class also stops for the ${esc(blockedText())}. Hours that would drop or overlap a booked family are refused and nothing is saved.</p>
                 <button class="btn btn-primary hours-save" id="hoursSave-${i}" data-idx="${i}">Save hours</button>
               </div>
             </div>
             <p style="font-size:13px; color:var(--ink-soft); margin:0 0 10px;">
-              Hours: ${formatTime(c.startTime)}–${formatTime(c.endTime)}, ${esc(c.incrementMin)}-min slots, ${breakLabel(c.breakMin)}${BLOCKED.length ? ', ' + esc(blockedText()) : ''} &nbsp;·&nbsp;
-              Teacher link: <span class="copy-link" data-link="${esc(teacherLink)}">copy</span>
+              ${c.days.map((d) => d.closed ? `${esc(d.label)}: no conferences` : `${esc(d.label)}: ${formatTime(d.startTime)}–${formatTime(d.endTime)}`).join(' &nbsp;·&nbsp; ')}<br />
+              ${esc(c.incrementMin)}-min slots, ${breakLabel(c.breakMin)}${BLOCKED.length ? ', ' + esc(blockedText()) : ''} &nbsp;·&nbsp;
+              Teacher link: <span class="copy-link" data-link="${esc(teacherLink)}">copy</span> or
+              <a href="${esc(teacherLink)}" target="_blank" rel="noopener" style="color:var(--navy-700); font-weight:600;">open it as the teacher</a>
             </p>
+            ${c.isTest ? `<p class="hint" style="margin:0 0 12px;">Use this class to try everything a teacher can do: book it from the parent page with the code ${esc(c.parentCode)}, change hours, turn a day off, cancel a conference and print. Booking emails for it go to the principal address.</p>` : ''}
             ${c.bookings.length ? `
               <table>
                 <tr><th>Day</th><th>Time</th><th>Student</th><th>Parent</th><th>Contact</th></tr>
@@ -305,6 +333,7 @@
           setTimeout(() => { e.target.textContent = orig; }, 1200);
           return;
         }
+        if (e.target.closest('a')) return;
         if (e.target.closest('.hours-edit')) {
           if (e.target.closest('.hours-save')) saveHours(Number(row.dataset.idx));
           return;

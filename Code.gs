@@ -5,6 +5,16 @@
 
 const SHEET_NAME_CLASSES = 'Classes';
 const SHEET_NAME_BOOKINGS = 'Bookings';
+
+// Classes sheet columns. StartTime/EndTime are the default hours; each day can
+// override them with Day1Start/Day1End (Wednesday) and Day2Start/Day2End
+// (Thursday), and Day1Closed/Day2Closed (TRUE) turns a day off for that class.
+// A blank Day cell falls back to StartTime/EndTime.
+const CLASS_HEADERS = [
+  'ClassID', 'Grade', 'Teacher', 'ParentCode', 'TeacherToken',
+  'StartTime', 'EndTime', 'IncrementMin', 'Active', 'BreakMin',
+  'Day1Start', 'Day1End', 'Day1Closed', 'Day2Start', 'Day2End', 'Day2Closed',
+];
 const CONF_DAYS = [
   { key: 'day1', date: '2026-11-04', label: 'Wednesday, Nov 4' },
   { key: 'day2', date: '2026-11-05', label: 'Thursday, Nov 5' },
@@ -22,8 +32,18 @@ const DEFAULT_BREAK_MIN = 5;
 // Slots that would overlap a window are skipped, and the next slot starts
 // exactly when the window ends. Parents see the window as a marker in the grid.
 const BLOCKED_TIMES = [
-  { start: '17:00', end: '17:30', label: 'Dinner break' },
+  { start: '17:00', end: '17:45', label: 'Dinner break' },
 ];
+
+// Where teachers open their private schedule page. Their emails link here
+// with ?t=<their private token>. Update it if the site moves to another host.
+const TEACHER_PAGE_URL = 'https://hvjaparentteacherconference.upham51.workers.dev/teacher';
+
+// The principal's practice class. It works exactly like a real class (parents
+// can book it with the code, the teacher page has every feature) but it is
+// left out of the dashboard totals. Created by applyLaunchSettings().
+const TEST_CLASS_ID = 'principaltest';
+const TEST_CLASS = { classId: TEST_CLASS_ID, grade: 'Practice class', teacher: 'Principal test class', parentCode: 'PTEST' };
 
 // The address used to build the "manage my booking" link in confirmation
 // emails. This is the school's own short link, which redirects to wherever the
@@ -58,6 +78,7 @@ const TEACHER_EMAILS = {
   waymire: ['swaymire@hvja.org'],
   morita: ['tmorita@hvja.org'],
   saliba: ['vsaliba@hvja.org'],
+  principaltest: ['principal@hvja.org'],
 };
 
 const CLASS_SEED = [
@@ -108,28 +129,12 @@ function setup() {
   let classes = ss.getSheetByName(SHEET_NAME_CLASSES);
   if (!classes) classes = ss.insertSheet(SHEET_NAME_CLASSES);
   classes.clear();
-  classes.appendRow([
-    'ClassID', 'Grade', 'Teacher', 'ParentCode', 'TeacherToken',
-    'StartTime', 'EndTime', 'IncrementMin', 'Active', 'BreakMin',
-  ]);
+  classes.appendRow(CLASS_HEADERS);
   classes.setFrozenRows(1);
 
-  const rows = CLASS_SEED.map(function (c) {
-    return [
-      c.classId,
-      c.grade,
-      c.teacher,
-      c.classId.toUpperCase(),
-      Utilities.getUuid().split('-')[0] + Utilities.getUuid().split('-')[1],
-      "'" + DEFAULT_START,
-      "'" + DEFAULT_END,
-      DEFAULT_INCREMENT,
-      true,
-      DEFAULT_BREAK_MIN,
-    ];
-  });
+  const rows = CLASS_SEED.concat([TEST_CLASS]).map(function (c) { return classRow_(CLASS_HEADERS, c); });
   classes.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-  classes.autoResizeColumns(1, 10);
+  classes.autoResizeColumns(1, CLASS_HEADERS.length);
 
   let bookings = existing;
   if (!bookings) bookings = ss.insertSheet(SHEET_NAME_BOOKINGS);
@@ -150,56 +155,81 @@ function setup() {
   );
 }
 
-// Adds the BreakMin column to the Classes sheet if it is missing and returns
-// its 1-based column number. Callers hold the lock or run from the editor.
-function ensureBreakColumn_(sheet) {
+// Adds any of the named columns that the Classes sheet doesn't have yet.
+// Callers hold the lock or run from the editor.
+function ensureColumns_(sheet, names) {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const at = headers.indexOf('BreakMin');
-  if (at !== -1) return at + 1;
-  sheet.getRange(1, headers.length + 1).setValue('BreakMin');
-  return headers.length + 1;
+  const missing = names.filter(function (n) { return headers.indexOf(n) === -1; });
+  if (missing.length) sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+  return missing;
 }
 
-// One-time launch step, run from the Apps Script editor after redeploying.
-// Writes the full teacher names into the Classes sheet, adds the BreakMin
-// column if it is missing, and sets every class to a 5 minute break. It
-// refuses once anyone has booked, because a new break length can move or
-// remove times families already hold. Safe to run twice before launch.
+function newToken_() {
+  const a = Utilities.getUuid().split('-');
+  return a[0] + a[1];
+}
+
+// One Classes row, laid out by the sheet's own header order.
+function classRow_(headers, c) {
+  const v = {
+    ClassID: c.classId, Grade: c.grade, Teacher: c.teacher,
+    ParentCode: c.parentCode || c.classId.toUpperCase(), TeacherToken: newToken_(),
+    StartTime: "'" + DEFAULT_START, EndTime: "'" + DEFAULT_END,
+    IncrementMin: DEFAULT_INCREMENT, Active: true, BreakMin: DEFAULT_BREAK_MIN,
+  };
+  return headers.map(function (h) { return Object.prototype.hasOwnProperty.call(v, h) ? v[h] : ''; });
+}
+
+// The one function to run after redeploying. It is safe to run again, and it
+// never overwrites a choice a teacher or the principal has made:
+//   1. adds the BreakMin and per-day columns to the Classes sheet if missing,
+//   2. writes the full teacher names,
+//   3. gives any class with no break set a 5 minute break (a break someone
+//      already chose is left alone),
+//   4. adds the principal's practice class (code PTEST) if it isn't there.
 function applyLaunchSettings() {
-  const bookings = getSheet_(SHEET_NAME_BOOKINGS);
-  if (bookings && bookings.getLastRow() > 1) {
-    throw new Error('applyLaunchSettings() was stopped: the Bookings tab already has ' +
-      (bookings.getLastRow() - 1) + ' booking(s), and a new break length could move them. Nothing was changed.');
-  }
-
-  const sheet = getSheet_(SHEET_NAME_CLASSES);
-  const breakCol = ensureBreakColumn_(sheet);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idCol = headers.indexOf('ClassID'), teacherCol = headers.indexOf('Teacher');
-  if (idCol === -1 || teacherCol === -1) {
-    throw new Error('The Classes tab is missing its ClassID or Teacher column. Nothing was changed.');
-  }
-
-  const names = {};
-  CLASS_SEED.forEach(function (c) { names[c.classId] = c.teacher; });
-  let renamed = 0;
-  const unmatched = [];
-  for (let r = 1; r < values.length; r++) {
-    const id = values[r][idCol];
-    if (!id) continue;
-    if (Object.prototype.hasOwnProperty.call(names, id)) {
-      sheet.getRange(r + 1, teacherCol + 1).setValue(names[id]);
-      renamed++;
-    } else {
-      unmatched.push(id);
+  const outcome = withLock_(function () {
+    const sheet = getSheet_(SHEET_NAME_CLASSES);
+    const added = ensureColumns_(sheet, CLASS_HEADERS);
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0];
+    const idCol = headers.indexOf('ClassID'), teacherCol = headers.indexOf('Teacher'), breakCol = headers.indexOf('BreakMin');
+    if (idCol === -1 || teacherCol === -1) {
+      throw new Error('The Classes tab is missing its ClassID or Teacher column. Nothing was changed.');
     }
-    sheet.getRange(r + 1, breakCol).setValue(DEFAULT_BREAK_MIN);
-  }
-  SpreadsheetApp.flush();
-  notify_('Launch settings applied. Teacher names updated for ' + renamed + ' class(es); every class now has a ' +
-    DEFAULT_BREAK_MIN + ' minute break.' +
-    (unmatched.length ? ' Not in the name list, names left alone: ' + unmatched.join(', ') + '.' : ''));
+
+    const names = {};
+    CLASS_SEED.concat([TEST_CLASS]).forEach(function (c) { names[c.classId] = c.teacher; });
+    let renamed = 0, breaksSet = 0, hasTest = false;
+    const unmatched = [];
+    for (let r = 1; r < values.length; r++) {
+      const id = values[r][idCol];
+      if (!id) continue;
+      if (id === TEST_CLASS_ID) hasTest = true;
+      if (Object.prototype.hasOwnProperty.call(names, id)) {
+        sheet.getRange(r + 1, teacherCol + 1).setValue(names[id]);
+        renamed++;
+      } else {
+        unmatched.push(id);
+      }
+      const cur = values[r][breakCol];
+      if (cur === '' || cur === null || cur === undefined) {
+        sheet.getRange(r + 1, breakCol + 1).setValue(DEFAULT_BREAK_MIN);
+        breaksSet++;
+      }
+    }
+    if (!hasTest) sheet.appendRow(classRow_(headers, TEST_CLASS));
+    SpreadsheetApp.flush();
+    return { added: added, renamed: renamed, breaksSet: breaksSet, addedTest: !hasTest, unmatched: unmatched };
+  });
+  if (outcome.ok === false) throw new Error(outcome.error);
+
+  notify_('Launch settings applied.\n' +
+    'Teacher names updated: ' + outcome.renamed + '.\n' +
+    'Classes given a ' + DEFAULT_BREAK_MIN + ' minute break: ' + outcome.breaksSet + ' (breaks already set were kept).\n' +
+    (outcome.added.length ? 'Columns added: ' + outcome.added.join(', ') + '.\n' : '') +
+    (outcome.addedTest ? 'Practice class added: parent code ' + TEST_CLASS.parentCode + '. Its teacher link is on the principal dashboard.\n' : 'Practice class was already there.\n') +
+    (outcome.unmatched.length ? 'Not in the name list, names left alone: ' + outcome.unmatched.join(', ') + '.' : ''));
 }
 
 // One-time upgrade for a Bookings sheet that was created before the
@@ -314,6 +344,7 @@ function doPost(e) {
     const action = body.action;
     if (action === 'book') return jsonOut(bookSlot_(body));
     if (action === 'updateSchedule') return jsonOut(updateSchedule_(body));
+    if (action === 'teacherCancel') return jsonOut(teacherCancel_(body));
     if (action === 'cancel') return jsonOut(cancelBooking_(body));
     if (action === 'manageCancel') return jsonOut(cancelByToken_(body));
     return jsonOut({ ok: false, error: 'Unknown action.' });
@@ -458,6 +489,31 @@ function formatTime12_(hhmm) {
   return h12 + ':' + (mm < 10 ? '0' : '') + mm + ' ' + (h >= 12 ? 'PM' : 'AM');
 }
 
+function isBlank_(v) { return v === '' || v === null || v === undefined; }
+function isTrue_(v) { return v === true || /^true$/i.test(String(v)); }
+
+// 'day1' -> the Classes columns that hold that day's hours.
+function dayColumns_(dayKey) {
+  const name = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
+  return { start: name + 'Start', end: name + 'End', closed: name + 'Closed' };
+}
+
+// Hours for one conference day: that day's own cells if filled in, otherwise
+// the class's default StartTime/EndTime. `closed` means no conferences that day.
+function hoursForDay_(cls, dayKey) {
+  const c = dayColumns_(dayKey);
+  const s = cls[c.start], e = cls[c.end];
+  return {
+    startTime: slotKey_(isBlank_(s) ? cls.StartTime : s),
+    endTime: slotKey_(isBlank_(e) ? cls.EndTime : e),
+    closed: isTrue_(cls[c.closed]),
+  };
+}
+
+function slotsForDay_(cls, dayKey) {
+  return generateSlots_(cls, BLOCKED_TIMES, dayKey);
+}
+
 // Minutes between conferences for a class. Missing column, blank cell or a
 // value outside 0/5/10 all fall back to the default.
 function breakMinFor_(cls) {
@@ -472,11 +528,17 @@ function breakMinFor_(cls) {
 // the window ends, so the grid restarts after the gap instead of running
 // through it. Every caller (booking, parent grid, schedule check, admin
 // totals) goes through here, so they always agree.
-function generateSlots_(cls, blockedTimes) {
+function generateSlots_(cls, blockedTimes, dayKey) {
   const inc = Number(cls.IncrementMin) || DEFAULT_INCREMENT;
   const brk = breakMinFor_(cls);
-  const startMin = minutesFromTimeValue_(cls.StartTime);
-  const endMin = minutesFromTimeValue_(cls.EndTime);
+  let startMin = minutesFromTimeValue_(cls.StartTime);
+  let endMin = minutesFromTimeValue_(cls.EndTime);
+  if (dayKey) {
+    const h = hoursForDay_(cls, dayKey);
+    if (h.closed) return [];
+    startMin = minutesFromTimeValue_(h.startTime);
+    endMin = minutesFromTimeValue_(h.endTime);
+  }
   const blocks = (blockedTimes || BLOCKED_TIMES).map(function (b) {
     return { s: minutesFromTimeValue_(b.start), e: minutesFromTimeValue_(b.end) };
   });
@@ -508,13 +570,16 @@ function isPastCutoff_(dayDef, slotStart) {
 
 // True if the slot overlaps any booking on that day. Uses overlap rather
 // than "same start time" so a booking can never be hidden by a grid change.
-function slotOverlapsBooking_(dayKey, slot, bookings) {
+function bookingForSlot_(dayKey, slot, bookings) {
   const s = minutesFromTimeValue_(slot.start), e = minutesFromTimeValue_(slot.end);
-  return bookings.some(function (b) {
+  return bookings.find(function (b) {
     if (b.Day !== dayKey) return false;
     const bs = minutesFromTimeValue_(b.StartTime), be = minutesFromTimeValue_(b.EndTime);
     return bs < e && s < be;
-  });
+  }) || null;
+}
+function slotOverlapsBooking_(dayKey, slot, bookings) {
+  return !!bookingForSlot_(dayKey, slot, bookings);
 }
 
 function sortBookings_(list) {
@@ -535,15 +600,16 @@ function getScheduleForCode_(code) {
   const cls = findClassByCode_(code);
   if (!cls) return { ok: false, error: 'That classroom code was not found. Please check with your teacher.' };
 
-  const slots = generateSlots_(cls);
   const bookings = getBookingsForClass_(cls.ClassID);
 
   const days = CONF_DAYS.map(function (d) {
+    const closedDay = hoursForDay_(cls, d.key).closed;
     return {
       key: d.key,
       date: d.date,
       label: d.label,
-      slots: slots.map(function (s) {
+      closed: closedDay,
+      slots: slotsForDay_(cls, d.key).map(function (s) {
         const taken = slotOverlapsBooking_(d.key, s, bookings);
         const closed = !taken && isPastCutoff_(d, s.start);
         return { start: s.start, end: s.end, taken: taken || closed, closed: closed };
@@ -598,7 +664,11 @@ function bookSlot_(body) {
   const dayDef = CONF_DAYS.find(function (d) { return d.key === body.day; });
   if (!dayDef) return { ok: false, error: 'Invalid conference day.' };
 
-  const slot = generateSlots_(cls).find(function (s) { return s.start === slotKey_(body.start); });
+  if (hoursForDay_(cls, dayDef.key).closed) {
+    return { ok: false, code: 'day_closed', error: 'This teacher is not holding conferences that day. Please pick the other day.' };
+  }
+
+  const slot = slotsForDay_(cls, dayDef.key).find(function (s) { return s.start === slotKey_(body.start); });
   if (!slot) {
     return { ok: false, code: 'slot_gone', error: 'That time is no longer on the schedule. Please pick another.' };
   }
@@ -793,6 +863,12 @@ function sendToTeachers_(classId, subject, msg) {
   });
 }
 
+// The teacher's private schedule page, for the "view your schedule" line in
+// the emails that go to teachers.
+function teacherLink_(cls) {
+  return cls && cls.TeacherToken ? TEACHER_PAGE_URL + '?t=' + encodeURIComponent(cls.TeacherToken) : '';
+}
+
 function sendTeacherNotification_(cls, dayDef, slot, info) {
   const subject = 'New sign-up: ' + info.studentName + ', ' + dayDef.label + ' ' + formatTime12_(slot.start);
   const msg = 'Hi,\n\n' +
@@ -802,12 +878,12 @@ function sendTeacherNotification_(cls, dayDef, slot, info) {
     'Day: ' + dayDef.label + '\n' +
     'Time: ' + formatTime12_(slot.start) + ' to ' + formatTime12_(slot.end) + '\n' +
     'Contact: ' + info.email + (info.phone ? ' / ' + info.phone : '') + '\n\n' +
-    'View your full schedule any time at your private link.\n\n' +
+    'View, print or cancel from your private schedule page:\n' + teacherLink_(cls) + '\n\n' +
     'Hood View Adventist School';
   sendToTeachers_(cls.ClassID, subject, msg);
 }
 
-function sendCancellationEmails_(cls, booking) {
+function sendCancellationEmails_(cls, booking, byTeacher) {
   const dayDef = CONF_DAYS.find(function (d) { return d.key === booking.Day; });
   const dayLabel = dayDef ? dayDef.label : booking.Day;
   const teacherName = cls ? cls.Teacher : booking.ClassID;
@@ -817,7 +893,9 @@ function sendCancellationEmails_(cls, booking) {
     sendMail_(booking.Email,
       'Conference cancelled: ' + dayLabel + ' with ' + teacherName,
       'Hi ' + booking.ParentName + ',\n\n' +
-      'Your parent-teacher conference has been cancelled:\n\n' +
+      (byTeacher
+        ? 'Your teacher had to cancel your parent-teacher conference. We are sorry for the change:\n\n'
+        : 'Your parent-teacher conference has been cancelled:\n\n') +
       'Student: ' + booking.StudentName + '\n' +
       'Teacher: ' + teacherName + '\n' +
       'Day: ' + dayLabel + '\n' +
@@ -829,14 +907,18 @@ function sendCancellationEmails_(cls, booking) {
     console.error(err);
   }
 
+  const link = teacherLink_(cls);
   sendToTeachers_(booking.ClassID,
     'Cancelled: ' + booking.StudentName + ', ' + dayLabel + ' ' + formatTime12_(slotKey_(booking.StartTime)),
     'Hi,\n\n' +
-    'A family cancelled their conference. The time is open again for other families.\n\n' +
+    (byTeacher
+      ? 'A conference was cancelled from the teacher schedule page, and the family has been emailed. The time is open again for other families.\n\n'
+      : 'A family cancelled their conference. The time is open again for other families.\n\n') +
     'Student: ' + booking.StudentName + '\n' +
     'Parent: ' + booking.ParentName + '\n' +
     'Day: ' + dayLabel + '\n' +
     'Time: ' + time + '\n\n' +
+    (link ? 'Your schedule: ' + link + '\n\n' : '') +
     'Hood View Adventist School');
 }
 
@@ -921,6 +1003,7 @@ function markReminded_(bookingIds) {
 function bookingOut_(b) {
   const dayDef = CONF_DAYS.find(function (d) { return d.key === b.Day; });
   return {
+    bookingId: b.BookingID,
     day: b.Day,
     dayLabel: dayDef ? dayDef.label : b.Day,
     start: slotKey_(b.StartTime),
@@ -938,9 +1021,28 @@ function getTeacherView_(token) {
 
   const bookings = sortBookings_(getBookingsForClass_(cls.ClassID));
 
+  // Every slot of each day, with the family in it (or null), so the page can
+  // print a full timetable as well as the sign-up list.
+  const days = CONF_DAYS.map(function (d) {
+    const h = hoursForDay_(cls, d.key);
+    return {
+      key: d.key,
+      date: d.date,
+      label: d.label,
+      closed: h.closed,
+      startTime: h.startTime,
+      endTime: h.endTime,
+      slots: slotsForDay_(cls, d.key).map(function (s) {
+        const b = bookingForSlot_(d.key, s, bookings);
+        return { start: s.start, end: s.end, booking: b ? bookingOut_(b) : null };
+      }),
+    };
+  });
+
   return {
     ok: true,
     classId: cls.ClassID,
+    isTest: cls.ClassID === TEST_CLASS_ID,
     grade: cls.Grade,
     teacher: cls.Teacher,
     parentCode: cls.ParentCode,
@@ -949,25 +1051,25 @@ function getTeacherView_(token) {
     incrementMin: Number(cls.IncrementMin) || DEFAULT_INCREMENT,
     breakMin: breakMinFor_(cls),
     blocked: BLOCKED_TIMES,
-    days: CONF_DAYS,
+    days: days,
     bookings: bookings.map(bookingOut_),
   };
 }
 
+// Saves a class's schedule. `body.days` holds each day's hours and whether the
+// day is off: { day1: { closed, startTime, endTime }, day2: { ... } }. A page
+// that only sends startTime/endTime applies them to both days and leaves each
+// day's open/closed state alone. Nothing is saved unless every family already
+// booked still lands exactly on a slot of the new schedule.
 function updateSchedule_(body) {
   const cls = findClassByToken_(body.token);
   if (!cls) return { ok: false, error: 'Invalid teacher link.' };
 
   const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
-  const start = String(body.startTime || ''), end = String(body.endTime || '');
   const inc = Number(body.incrementMin);
   // An older page that doesn't send a break keeps the class's current one.
   const brk = (body.breakMin === undefined || body.breakMin === null || body.breakMin === '')
     ? breakMinFor_(cls) : Number(body.breakMin);
-  if (!hhmm.test(start) || !hhmm.test(end)) return { ok: false, error: 'Please pick a start and end time.' };
-  if (minutesFromTimeValue_(start) >= minutesFromTimeValue_(end)) {
-    return { ok: false, error: 'End time needs to be after start time.' };
-  }
   if (ALLOWED_INCREMENTS.indexOf(inc) === -1) {
     return { ok: false, error: 'Conference length must be 10, 15, 20 or 30 minutes.' };
   }
@@ -975,14 +1077,45 @@ function updateSchedule_(body) {
     return { ok: false, error: 'Break between conferences must be none, 5 or 10 minutes.' };
   }
 
+  const plan = {};
+  for (let i = 0; i < CONF_DAYS.length; i++) {
+    const d = CONF_DAYS[i];
+    const cur = hoursForDay_(cls, d.key);
+    let src = body.days && typeof body.days === 'object' ? body.days[d.key] : null;
+    if (!body.days) src = { startTime: body.startTime, endTime: body.endTime, closed: cur.closed };
+    if (!src) return { ok: false, error: 'Please set the hours for ' + d.label + ', or turn that day off.' };
+
+    const closed = src.closed === true || src.closed === 'true';
+    let start = String(src.startTime || ''), end = String(src.endTime || '');
+    if (closed) {
+      // A day that is off keeps whatever hours it had, so turning it back on
+      // later restores them.
+      if (!hhmm.test(start) || !hhmm.test(end)) { start = cur.startTime; end = cur.endTime; }
+    } else {
+      if (!hhmm.test(start) || !hhmm.test(end)) return { ok: false, error: 'Please pick a start and end time for ' + d.label + '.' };
+      if (minutesFromTimeValue_(start) >= minutesFromTimeValue_(end)) {
+        return { ok: false, error: 'End time needs to be after start time on ' + d.label + '.' };
+      }
+    }
+    plan[d.key] = { closed: closed, startTime: start, endTime: end };
+  }
+
   const result = withLock_(function () {
-    // Every family already booked must land exactly on a slot in the new
-    // schedule. Otherwise they'd drop off the grid or overlap a new slot.
-    const newSlots = generateSlots_({ StartTime: start, EndTime: end, IncrementMin: inc, BreakMin: brk }, BLOCKED_TIMES);
+    // Every family already booked must land exactly on a slot of the new
+    // schedule. Otherwise they'd drop off the grid, overlap a new slot, or be
+    // left on a day that is now off.
     const fits = {};
-    newSlots.forEach(function (s) { fits[s.start + '-' + s.end] = true; });
+    CONF_DAYS.forEach(function (d) {
+      const p = plan[d.key];
+      fits[d.key] = {};
+      if (p.closed) return;
+      generateSlots_({ StartTime: p.startTime, EndTime: p.endTime, IncrementMin: inc, BreakMin: brk }, BLOCKED_TIMES)
+        .forEach(function (s) { fits[d.key][s.start + '-' + s.end] = true; });
+    });
     const conflicts = sortBookings_(getBookingsForClass_(cls.ClassID)).filter(function (b) {
-      return !fits[slotKey_(b.StartTime) + '-' + slotKey_(b.EndTime)];
+      if (!plan[b.Day]) return false;
+      if (plan[b.Day].closed) return true;
+      return !fits[b.Day][slotKey_(b.StartTime) + '-' + slotKey_(b.EndTime)];
     });
     if (conflicts.length) {
       const list = conflicts.slice(0, 5).map(function (b) {
@@ -992,23 +1125,34 @@ function updateSchedule_(body) {
       return {
         ok: false,
         error: 'Nothing was saved. ' + conflicts.length + (conflicts.length === 1 ? ' family is' : ' families are') +
-          ' already booked at a time the new hours would remove or overlap (' + list +
-          (conflicts.length > 5 ? '; and more' : '') + '). Keep hours, a conference length and a break that include those times, ' +
-          'or contact the school office to move those families first.',
+          ' already booked at a time the new schedule would remove or overlap (' + list +
+          (conflicts.length > 5 ? '; and more' : '') + '). Keep hours, a conference length, a break and open days that include those times, ' +
+          'or cancel those conferences first from the sign-up list.',
       };
     }
 
     const sheet = getSheet_(SHEET_NAME_CLASSES);
-    const breakCol = ensureBreakColumn_(sheet);
+    ensureColumns_(sheet, CLASS_HEADERS);
     const values = sheet.getDataRange().getValues();
     const headers = values[0];
+    const col = function (name) { return headers.indexOf(name) + 1; };
     const idCol = headers.indexOf('ClassID');
     for (let r = 1; r < values.length; r++) {
       if (values[r][idCol] === cls.ClassID) {
-        sheet.getRange(r + 1, headers.indexOf('StartTime') + 1).setValue("'" + start);
-        sheet.getRange(r + 1, headers.indexOf('EndTime') + 1).setValue("'" + end);
-        sheet.getRange(r + 1, headers.indexOf('IncrementMin') + 1).setValue(inc);
-        sheet.getRange(r + 1, breakCol).setValue(brk);
+        CONF_DAYS.forEach(function (d) {
+          const c = dayColumns_(d.key), p = plan[d.key];
+          sheet.getRange(r + 1, col(c.start)).setValue("'" + p.startTime);
+          sheet.getRange(r + 1, col(c.end)).setValue("'" + p.endTime);
+          sheet.getRange(r + 1, col(c.closed)).setValue(p.closed ? true : '');
+        });
+        // The default hours follow the first open day, so they stay meaningful.
+        const firstOpen = CONF_DAYS.find(function (d) { return !plan[d.key].closed; });
+        if (firstOpen) {
+          sheet.getRange(r + 1, col('StartTime')).setValue("'" + plan[firstOpen.key].startTime);
+          sheet.getRange(r + 1, col('EndTime')).setValue("'" + plan[firstOpen.key].endTime);
+        }
+        sheet.getRange(r + 1, col('IncrementMin')).setValue(inc);
+        sheet.getRange(r + 1, col('BreakMin')).setValue(brk);
         break;
       }
     }
@@ -1018,6 +1162,56 @@ function updateSchedule_(body) {
   if (result) return result;
 
   return getTeacherView_(body.token);
+}
+
+// A teacher cancels one of their own conferences. Only a booking in the
+// teacher's own class can be cancelled with their token. The family is told
+// by email, and the time opens up for others.
+function findBookingById_(classId, bookingId) {
+  const sheet = getSheet_(SHEET_NAME_BOOKINGS);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idCol = headers.indexOf('BookingID'), classCol = headers.indexOf('ClassID');
+  if (idCol === -1 || classCol === -1) return null;
+  for (let r = 1; r < values.length; r++) {
+    if (String(values[r][idCol]) === String(bookingId) && values[r][classCol] === classId) {
+      const obj = {};
+      headers.forEach(function (h, i) { obj[h] = values[r][i]; });
+      obj.__row = r + 1;
+      return obj;
+    }
+  }
+  return null;
+}
+
+function teacherCancel_(body) {
+  const requestId = cleanRequestId_(body && body.requestId);
+  const cached = getCachedResult_(requestId);
+  if (cached) return cached;
+
+  const cls = findClassByToken_(body && body.token);
+  if (!cls) return { ok: false, error: 'Invalid teacher link.' };
+  if (!body.bookingId) return { ok: false, error: 'Missing booking info.' };
+
+  let cancelled = null;
+  const result = withLock_(function () {
+    const again = getCachedResult_(requestId);
+    if (again) return again;
+    // Find the row inside the lock: another cancel may have shifted the rows.
+    const found = findBookingById_(cls.ClassID, body.bookingId);
+    if (!found) {
+      return { ok: false, code: 'not_found', error: 'That conference is no longer on your schedule, it may already have been cancelled. Nothing else was changed.' };
+    }
+    getSheet_(SHEET_NAME_BOOKINGS).deleteRow(found.__row);
+    SpreadsheetApp.flush();
+    const res = getTeacherView_(body.token);
+    putCachedResult_(requestId, res);
+    cancelled = found;
+    return res;
+  });
+
+  if (cancelled) sendCancellationEmails_(cls, cancelled, true);
+  return result;
 }
 
 // ---- Principal dashboard ----
@@ -1049,17 +1243,23 @@ function getAdminView_(pin) {
   const allBookings = readTable_(getSheet_(SHEET_NAME_BOOKINGS));
 
   const classSummaries = classes.map(function (cls) {
-    const slots = generateSlots_(cls);
-    const totalSlots = slots.length * CONF_DAYS.length;
+    const days = CONF_DAYS.map(function (d) {
+      const h = hoursForDay_(cls, d.key);
+      return { key: d.key, label: d.label, closed: h.closed, startTime: h.startTime, endTime: h.endTime,
+        slotCount: slotsForDay_(cls, d.key).length };
+    });
+    const totalSlots = days.reduce(function (n, d) { return n + d.slotCount; }, 0);
     const bookings = allBookings.filter(function (b) { return b.ClassID === cls.ClassID; });
     return {
       classId: cls.ClassID,
+      isTest: cls.ClassID === TEST_CLASS_ID,
       grade: cls.Grade,
       teacher: cls.Teacher,
       parentCode: cls.ParentCode,
       teacherToken: cls.TeacherToken,
       startTime: slotKey_(cls.StartTime),
       endTime: slotKey_(cls.EndTime),
+      days: days,
       incrementMin: Number(cls.IncrementMin) || DEFAULT_INCREMENT,
       breakMin: breakMinFor_(cls),
       totalSlots: totalSlots,
@@ -1069,8 +1269,10 @@ function getAdminView_(pin) {
     };
   });
 
-  const totalSlots = classSummaries.reduce(function (s, c) { return s + c.totalSlots; }, 0);
-  const totalBooked = classSummaries.reduce(function (s, c) { return s + c.booked; }, 0);
+  // The practice class is left out of the school-wide numbers.
+  const real = classSummaries.filter(function (c) { return !c.isTest; });
+  const totalSlots = real.reduce(function (s, c) { return s + c.totalSlots; }, 0);
+  const totalBooked = real.reduce(function (s, c) { return s + c.booked; }, 0);
 
   let emailQuota = null;
   try { emailQuota = MailApp.getRemainingDailyQuota(); } catch (err) { /* not critical */ }

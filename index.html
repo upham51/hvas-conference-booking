@@ -301,7 +301,7 @@
       }
       state.code = code;
       state.schedule = res;
-      state.activeDay = res.days[0].key;
+      state.activeDay = (res.days.find((d) => !d.closed) || res.days[0]).key;
       state.selected = null;
       renderBookScreen();
       showScreen('screen-book');
@@ -329,7 +329,7 @@
     el('dayTabs').innerHTML = s.days.map((d) => {
       const open = d.slots.filter((x) => !x.taken).length;
       return `<button class="day-tab ${d.key === state.activeDay ? 'active' : ''}" data-day="${esc(d.key)}">
-        ${formatShortDate(d.date)}<span class="count">${open} open</span>
+        ${formatShortDate(d.date)}<span class="count">${d.closed ? 'closed' : open + ' open'}</span>
       </button>`;
     }).join('');
 
@@ -350,7 +350,10 @@
       You're booking for <strong>${formatFullDate(day.date)}</strong>
     `;
 
-    if (!openSlots.length) {
+    if (day.closed) {
+      const other = s.days.find((d) => !d.closed);
+      el('slotArea').innerHTML = `<div class="empty-state">${esc(s.teacher)} is not holding conferences on ${esc(formatFullDate(day.date))}.${other ? ' Please pick ' + esc(formatShortDate(other.date)) + ' instead.' : ''}</div>`;
+    } else if (!openSlots.length) {
       el('slotArea').innerHTML = `<div class="empty-state">This teacher hasn't set up conference times yet. Please check back soon.</div>`;
     } else {
       // A blocked window (the dinner break) gets a marker where the gap falls,
@@ -463,7 +466,7 @@
     try {
       const res = await HVA_API.post(payload);
       if (!res.ok) {
-        if (res.code === 'slot_taken' || res.code === 'slot_gone' || res.code === 'slot_closed') {
+        if (res.code === 'slot_taken' || res.code === 'slot_gone' || res.code === 'slot_closed' || res.code === 'day_closed') {
           // The time itself is the problem: show why above a fresh grid.
           showNotice(res.error);
           await refreshSchedule();

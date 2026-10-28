@@ -3,7 +3,7 @@
   "private": true,
   "description": "Parent-teacher conference booking site for Hood View Adventist School",
   "scripts": {
-    "test": "node tests/slots-check.js && node tests/layout-check.js"
+    "test": "node tests/slots-check.js && node tests/backend-check.js && node tests/layout-check.js"
   },
   "devDependencies": {
     "playwright": "1.55.0"
