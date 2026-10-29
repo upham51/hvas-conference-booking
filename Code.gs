@@ -66,7 +66,7 @@ const SCHOOL_TIMEZONE = 'America/Los_Angeles';
 // Note: fhaffner@hvja.org (Fae Haffner, 1st Grade co-teacher) was given
 // to us as "likely" rather than confirmed, double check it with the office.
 const TEACHER_EMAILS = {
-  walker: ['walker@hvja.org'],
+  walker: ['swalker@hvja.org'],
   leslie: ['mleslie@hvja.org'],
   segoria: ['lsegoria@hvja.org'],
   mcginnis: ['tmcginnis@hvja.org'],

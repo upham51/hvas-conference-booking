@@ -97,7 +97,7 @@ function freshClass() {
   const t = freshClass();
   const ok = book(t, 'day2', '15:00');
   expect('a family can book', ok.ok, true);
-  expect('the booking email goes to the parent and the teacher', t.mail.map((m) => m.to).sort(), ['pat@example.com', 'walker@hvja.org']);
+  expect('the booking email goes to the parent and the teacher', t.mail.map((m) => m.to).sort(), ['pat@example.com', 'swalker@hvja.org']);
 
   const closing = t.call('updateSchedule_', { token: 'tok-walker', incrementMin: 15, breakMin: 5,
     days: { day1: hours('14:00', '19:00'), day2: hours('14:00', '19:00', true) } });
@@ -113,7 +113,7 @@ function freshClass() {
 {
   const t = freshClass();
   book(t, 'day1', '14:00');
-  const toTeacher = t.mail.find((m) => m.to === 'walker@hvja.org');
+  const toTeacher = t.mail.find((m) => m.to === 'swalker@hvja.org');
   expect('the teacher sign-up email links to their schedule page',
     toTeacher && toTeacher.body.indexOf('/teacher?t=tok-walker') !== -1, true);
 }
@@ -136,7 +136,7 @@ function freshClass() {
   expect('the booking row is gone', t.sheets.Bookings.rows.length, 1);
   const toParent = t.mail.find((m) => m.to === 'pat@example.com');
   expect('the family is told their teacher cancelled', toParent && /Your teacher had to cancel/.test(toParent.body), true);
-  expect('the teacher is emailed with a link', t.mail.some((m) => m.to === 'walker@hvja.org' && /teacher\?t=tok-walker/.test(m.body)), true);
+  expect('the teacher is emailed with a link', t.mail.some((m) => m.to === 'swalker@hvja.org' && /teacher\?t=tok-walker/.test(m.body)), true);
 
   const mails = t.mail.length;
   const again = t.call('teacherCancel_', { token: 'tok-walker', bookingId, requestId: 'cancel-req-0002' });
